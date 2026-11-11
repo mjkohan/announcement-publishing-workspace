@@ -30,5 +30,5 @@
     // supplied mocks must stay unchanged, so erasable-only syntax is disabled.
     "erasableSyntaxOnly": false
   },
-  "include": ["src"]
+  "include": ["src", "tests"]
 }

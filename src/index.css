@@ -1,3 +1,57 @@
+@import "tailwindcss";
+
+/*
+ * Semantic publication status colors.
+ * Each status has a foreground (text/icon) and a background (badge/surface) color.
+ * Values switch with prefers-color-scheme; @theme inline exposes them as utilities,
+ * e.g. text-status-published bg-status-published-bg.
+ */
+@theme inline {
+  --color-status-idle: var(--status-idle);
+  --color-status-idle-bg: var(--status-idle-bg);
+  --color-status-submitting: var(--status-submitting);
+  --color-status-submitting-bg: var(--status-submitting-bg);
+  --color-status-processing: var(--status-processing);
+  --color-status-processing-bg: var(--status-processing-bg);
+  --color-status-published: var(--status-published);
+  --color-status-published-bg: var(--status-published-bg);
+  --color-status-rejected: var(--status-rejected);
+  --color-status-rejected-bg: var(--status-rejected-bg);
+  --color-status-unconfirmed: var(--status-unconfirmed);
+  --color-status-unconfirmed-bg: var(--status-unconfirmed-bg);
+}
+
 :root {
+  color-scheme: light dark;
   font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+
+  --status-idle: #334155;
+  --status-idle-bg: #f1f5f9;
+  --status-submitting: #1e40af;
+  --status-submitting-bg: #dbeafe;
+  --status-processing: #92400e;
+  --status-processing-bg: #fef3c7;
+  --status-published: #166534;
+  --status-published-bg: #dcfce7;
+  --status-rejected: #991b1b;
+  --status-rejected-bg: #fee2e2;
+  --status-unconfirmed: #5b21b6;
+  --status-unconfirmed-bg: #ede9fe;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --status-idle: #cbd5e1;
+    --status-idle-bg: #1e293b;
+    --status-submitting: #bfdbfe;
+    --status-submitting-bg: #1e3a8a;
+    --status-processing: #fde68a;
+    --status-processing-bg: #78350f;
+    --status-published: #bbf7d0;
+    --status-published-bg: #14532d;
+    --status-rejected: #fecaca;
+    --status-rejected-bg: #7f1d1d;
+    --status-unconfirmed: #ddd6fe;
+    --status-unconfirmed-bg: #4c1d95;
+  }
 }
