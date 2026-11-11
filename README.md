@@ -16,6 +16,6 @@ nvm use
 npm install
 npm run dev      # start the dev server
 npm run build    # type-check and build for production
-npm run lint     # lint with oxlint
+npm run lint     # lint with ESLint
 npm run preview  # preview the production build
 ```

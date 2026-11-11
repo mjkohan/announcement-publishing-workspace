@@ -1,10 +1,12 @@
 # CLAUDE.md
 
 ## Goal
+
 Announcement publishing workspace (React + TypeScript) for a simulated publishing service.
 Users pick one of three fixed announcements, publish it, follow the outcome, and recover safely after failures or refresh. Brief: `docs/ASSIGNMENT.md`.
 
 ## Stack
+
 - React 19, TypeScript (strict), Vite
 - Zustand 5: vanilla `createStore` + `useStore` hook
 - Tailwind CSS v4
@@ -13,6 +15,7 @@ Users pick one of three fixed announcements, publish it, follow the outcome, and
 - Optional later: Husky + lint-staged + commitlint
 
 ## HARD RULES
+
 - Never modify anything in `src/mocks/`. It must stay byte-identical to the supplied mocks (checked by `npm run verify:mocks`).
 - Never read the mock's own sessionStorage key (`announcement-workspace:mock-service:v1`). Only use the public service API: `getAnnouncements`, `publish`, `getStatus`, `listOperations`.
 - Import the service only from `src/mocks` (its `index.ts`) and create it with `createAnnouncementMock()`. Never import `createService` or anything else from `src/mocks/service.ts` directly.
@@ -29,6 +32,7 @@ Users pick one of three fixed announcements, publish it, follow the outcome, and
 - Write the journal entry BEFORE calling `service.publish`.
 
 ## Service facts (from `src/mocks/service.ts`)
+
 - `publish` records the operation synchronously when called; the reply arrives later or is lost (`RESPONSE_LOST`).
 - Reusing an operationId returns the current snapshot of that operation; using it for another announcement rejects with `OPERATION_ID_CONFLICT`.
 - `getStatus` returning `null` means the ID is not recorded. It is not a rejection.
@@ -36,6 +40,7 @@ Users pick one of three fixed announcements, publish it, follow the outcome, and
 - Snapshots can arrive late and out of order. Version 1 = processing, version 2 = terminal.
 
 ## Planned folder structure
+
 - `src/mocks` — supplied mocks, unchanged
 - `src/domain` — pure types and logic (derivation, merge rules)
 - `src/persistence` — app-owned journal in sessionStorage (own key, never the mock's)
@@ -49,22 +54,26 @@ Users pick one of three fixed announcements, publish it, follow the outcome, and
 - `scripts` — repo scripts (e.g. mock verification)
 
 ## Commands
+
 Some are added in later tasks.
+
 - `npm run dev` — dev server
 - `npm run build` — type-check and production build
 - `npm run typecheck` — TypeScript only
-- `npm run lint` — oxlint
-- `npm run format` — formatter
+- `npm run lint` — ESLint (`lint:fix` to autofix)
+- `npm run format` — Prettier (`format:check` to verify)
 - `npm run test` — Vitest
 - `npm run test:e2e` — Playwright
 - `npm run verify:mocks` — check `src/mocks` is byte-identical to the supplied mocks
 - `npm run check` — all checks before commit
 
 ## Git
+
 - Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `test:`, `refactor:`). Enforced by commitlint once the optional hooks task is done.
 - Small, focused commits.
 - Run `npm run check` before committing (until it exists: `npm run build` and `npm run lint`).
 - Never add yourself (the AI agent) as author or co-author of a commit. No `Co-Authored-By` lines and no AI attribution trailers in commit messages or PR descriptions.
 
 ## Testing
+
 - Never weaken a test expectation to make it pass. Report the bug instead.
