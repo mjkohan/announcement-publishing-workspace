@@ -16,11 +16,19 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Strictness */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "erasableSyntaxOnly": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    // src/mocks/service.ts uses constructor parameter properties, and the
+    // supplied mocks must stay unchanged, so erasable-only syntax is disabled.
+    "erasableSyntaxOnly": false
   },
   "include": ["src"]
 }
