@@ -69,10 +69,20 @@ Some are added in later tasks.
 
 ## Git
 
-- Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `test:`, `refactor:`). Enforced by commitlint once the optional hooks task is done.
+- Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `test:`, `refactor:`). Enforced by commitlint (see Git hooks).
 - Small, focused commits.
 - Run `npm run check` before committing (until it exists: `npm run build` and `npm run lint`).
 - Never add yourself (the AI agent) as author or co-author of a commit. No `Co-Authored-By` lines and no AI attribution trailers in commit messages or PR descriptions.
+
+## Git hooks
+
+Husky installs them on `npm install` (`prepare` script). Hooks are POSIX sh (Git Bash on Windows, sh on Linux).
+
+- `commit-msg`: commitlint (`commitlint.config.js`). Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Scope optional. Header max 100 characters.
+- `pre-commit`: lint-staged (`lint-staged.config.js`: ESLint `--fix` and Prettier on staged files), then `npm run verify:mocks`. `src/mocks` is skipped by the ESLint ignores and `.prettierignore`.
+- `pre-push`: `npm run typecheck && npm test`.
+- CI runs commitlint on every commit of a pull request.
+- Never bypass hooks with `--no-verify`. Fix the cause instead.
 
 ## Testing
 

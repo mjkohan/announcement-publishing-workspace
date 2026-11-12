@@ -25,6 +25,24 @@ jobs:
       - run: npm run check
       - run: npm run build
 
+  commitlint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: >-
+          npx commitlint
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+          --verbose
+
   # e2e: Playwright job goes here later (needs: check).
 
   # deploy: deploy job goes here later (needs: [check, e2e], main branch only).
