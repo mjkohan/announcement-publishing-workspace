@@ -28,21 +28,21 @@ export interface PublicationState {
 }
 
 export interface PublicationActions {
-  loadAnnouncements(): Promise<void>;
+  loadAnnouncements: () => Promise<void>;
   /** Starts the first attempt. Only from "idle". Returns the new operationId, if any. */
-  publish(announcementId: string): string | undefined;
+  publish: (announcementId: string) => string | undefined;
   /** Starts a new attempt with a new operationId. Only from "rejected". */
-  startNewAttempt(announcementId: string): string | undefined;
+  startNewAttempt: (announcementId: string) => string | undefined;
   /**
    * Sends `publish` again with the SAME operationId. Only for an unconfirmed attempt (failed
    * request, no snapshot) with no publish in flight. Returns whether a request was sent.
    */
-  retrySameAttempt(operationId: string): boolean;
+  retrySameAttempt: (operationId: string) => boolean;
   /** Reads the status of one operation. Skipped when terminal or when a read is in flight. */
-  check(operationId: string): Promise<void>;
+  check: (operationId: string) => Promise<void>;
   /** Applies snapshots; creates entries for operations the store does not know yet. */
-  applySnapshots(snapshots: readonly PublicationOperation[]): void;
-  dismissPublishBlocked(): void;
+  applySnapshots: (snapshots: readonly PublicationOperation[]) => void;
+  dismissPublishBlocked: () => void;
 }
 
 export type PublicationStore = PublicationState & PublicationActions;

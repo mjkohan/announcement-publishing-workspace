@@ -1,5 +1,3 @@
-function App() {
+export function App() {
   return <h1 className="p-4 text-2xl font-semibold">Announcement Publishing</h1>;
 }
-
-export default App;
