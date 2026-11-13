@@ -193,7 +193,14 @@ export function createPublicationStore({
       let apply = keep;
       try {
         const snapshot = await service.publish(entry.announcementId, operationId);
-        apply = (current) => withoutError(mergeSnapshot(current, snapshot));
+        // The reply carries the state from when the request was sent. It clears an error only
+        // when it brings newer data (a first snapshot or a higher version); a same-version or
+        // older reply must not hide a newer failed status read.
+        apply = (current) => {
+          const merged = mergeSnapshot(current, snapshot);
+          const newer = snapshot.version > (current.snapshot?.version ?? 0);
+          return newer ? withoutError(merged) : merged;
+        };
       } catch (error) {
         // A lost response means "outcome unknown", never "failed". Once a status read has
         // brought a snapshot, the operation is known to be recorded and the error adds nothing

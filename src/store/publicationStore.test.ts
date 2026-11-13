@@ -485,6 +485,28 @@ describe("check", () => {
     expect(view().kind).toBe("published");
   });
 
+  it("keeps the stale warning when a late publish reply brings no newer version", async () => {
+    const { store, publishes, statuses, entry, view } = setup();
+    const id = store.getState().publish(ANN) ?? "";
+
+    let done = store.getState().check(id);
+    statuses[0]?.reply.resolve(snapshot(id, "processing"));
+    await done;
+    done = store.getState().check(id);
+    statuses[1]?.reply.reject(new AnnouncementMockError("STATUS_UNAVAILABLE", "r", id));
+    await done;
+    expect(view()).toMatchObject({ kind: "processing", stale: true });
+
+    lastPublish(publishes).reply.resolve(snapshot(id, "processing")); // v1, from the request time
+    await flush();
+
+    expect(entry(id)).toMatchObject({
+      publishInFlight: false,
+      lastError: { kind: "status-unavailable" },
+    });
+    expect(view()).toMatchObject({ kind: "processing", stale: true });
+  });
+
   it("never lets a late v1 overwrite a terminal snapshot", async () => {
     const { store, publishes, statuses, entry } = setup();
     const id = store.getState().publish(ANN) ?? "";
