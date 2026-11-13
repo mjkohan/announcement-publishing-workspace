@@ -142,11 +142,14 @@ export function createPublicationStore({
       });
     }
 
-    function viewKindOf(announcementId: string): AnnouncementViewKind {
-      const attempts = Object.values(get().operations).filter(
+    function attemptsOf(announcementId: string): OperationEntry[] {
+      return Object.values(get().operations).filter(
         (entry) => entry.announcementId === announcementId,
       );
-      return deriveAnnouncementView(attempts).kind;
+    }
+
+    function viewKindOf(announcementId: string): AnnouncementViewKind {
+      return deriveAnnouncementView(attemptsOf(announcementId)).kind;
     }
 
     function entryFromSnapshot(snapshot: PublicationOperation, epoch: number): OperationEntry {
@@ -403,6 +406,10 @@ export function createPublicationStore({
       // Until restore is done, existing attempts are unknown: a new one could be a duplicate.
       if (get().restoreStatus !== "ready") return undefined;
       if (viewKindOf(announcementId) !== allowedFrom) return undefined;
+      // The view follows the latest attempt by `createdAt`, which mixes the local clock (journal)
+      // and the service clock (listed operations). Never rely on that order alone: no new
+      // operationId while ANY attempt of this announcement is unresolved.
+      if (attemptsOf(announcementId).some((entry) => !isTerminal(entry))) return undefined;
 
       const operationId = createOperationId();
       const createdAt = now();

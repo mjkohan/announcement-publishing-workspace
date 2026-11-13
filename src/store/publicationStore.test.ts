@@ -243,6 +243,22 @@ describe("startNewAttempt", () => {
     expect(publishes).toHaveLength(1);
   });
 
+  it("is refused while an older attempt is unresolved, even if the latest one is rejected", () => {
+    const { store, publishes, view } = setup();
+    // createdAt order (clock skew): the unresolved attempt sorts before the rejected one.
+    store
+      .getState()
+      .applySnapshots([
+        snapshot("op-unresolved", "processing", ANN, "2026-03-01T09:00:00.000Z"),
+        snapshot("op-rejected", "rejected", ANN, "2026-03-01T10:00:00.000Z"),
+      ]);
+    expect(view()).toMatchObject({ kind: "rejected", op: { operationId: "op-rejected" } });
+
+    expect(store.getState().startNewAttempt(ANN)).toBeUndefined();
+    expect(publishes).toHaveLength(0);
+    expect(Object.keys(store.getState().operations)).toHaveLength(2);
+  });
+
   it("creates a new operationId with a higher seq after a rejection", async () => {
     const { store, publishes, entry, log } = setup();
     const first = store.getState().publish(ANN) ?? "";
