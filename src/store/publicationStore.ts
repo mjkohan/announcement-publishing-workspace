@@ -252,6 +252,11 @@ export function createPublicationStore({
         // flight the service may simply not have answered it yet.
         if (current.publishInFlight || current.checkSeq !== seq) {
           next = current;
+        } else if (current.snapshot) {
+          // The service had reported this operation before (records cleared elsewhere?). Keep
+          // the snapshot, show it as stale, and keep following with backoff.
+          next = { ...current, lastError: { kind: "not-recorded", at }, lastCheckedAt: at };
+          outcome = "failed";
         } else {
           next = { ...current, lastError: { kind: "not-recorded", at }, lastCheckedAt: at };
           // Asking again changes nothing. `retrySameAttempt` follows the operation again.

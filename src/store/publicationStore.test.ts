@@ -690,6 +690,24 @@ describe("following (status polling)", () => {
     expect(statuses).toHaveLength(2);
   });
 
+  it("keeps following, with backoff, a known operation that suddenly reads as null", async () => {
+    const { publishes, statuses, status, entry, id, view } = pollingSetup();
+    lastPublish(publishes).reply.resolve(snapshot(id, "processing"));
+    await advance(1_500);
+
+    status(0).reply.resolve(null);
+    await advance(0);
+    expect(entry(id)).toMatchObject({
+      snapshot: { status: "processing" },
+      lastError: { kind: "not-recorded" },
+      nextCheckAt: Date.now() + 1_000,
+    });
+    expect(view()).toMatchObject({ kind: "processing", stale: true });
+
+    await advance(1_000);
+    expect(statuses).toHaveLength(2);
+  });
+
   it("stops when the publish reply is terminal: no status read is sent", async () => {
     const { publishes, statuses, entry, id, view } = pollingSetup();
 
