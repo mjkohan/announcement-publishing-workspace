@@ -8,6 +8,8 @@ import {
 } from "../src/mocks";
 import { createJournal } from "../src/persistence/journal";
 import { createPublicationStore, selectAttempts, selectView } from "../src/store";
+import { browserTimers } from "../src/store/scheduler";
+import { inertTimers } from "../src/test/inertTimers";
 
 const ANN = "ann-101";
 const REJECTION_REASON = "This announcement was declined by the publication service.";
@@ -24,13 +26,15 @@ async function readOps(service: IAnnouncementService): Promise<PublicationOperat
   return pending;
 }
 
-function setup(scenario: AnnouncementScenario) {
+/** `polling: false` turns off status polling for tests that drive every read by hand. */
+function setup(scenario: AnnouncementScenario, { polling = true }: { polling?: boolean } = {}) {
   const service = createAnnouncementMock();
   service.setScenario(scenario);
   const store = createPublicationStore({
     service,
     journal: createJournal(sessionStorage),
     now: () => Date.now(),
+    timers: polling ? browserTimers : inertTimers,
   });
   const publishSpy = vi.spyOn(service, "publish");
 
@@ -84,6 +88,33 @@ describe("publication store with the supplied mock", () => {
     expect(result.kind === "published" && result.op.snapshot.publicationId).toBe(
       `publication-g1-${id}`,
     );
+  });
+
+  it("slow-response: polling shows published before the late publish reply", async () => {
+    const { service, publishSpy, actions, view, entry } = setup("slow-response");
+    const statusSpy = vi.spyOn(service, "getStatus");
+
+    const id = published(actions().publish(ANN));
+    await advance(1_499);
+    expect(view().kind).toBe("submitting");
+
+    // First read at 1.5 s (the operation is complete by then), reply after 100 ms.
+    await advance(1 + 100);
+    expect(view()).toMatchObject({ kind: "published", op: { operationId: id } });
+    expect(entry(id)).toMatchObject({ publishInFlight: true, snapshot: { version: 2 } });
+    expect(entry(id).nextCheckAt).toBeUndefined();
+
+    // The publish reply (v1, captured when the request was sent) arrives at 4.5 s and is ignored.
+    await advance(4_500 - 1_600);
+    expect(entry(id)).toMatchObject({
+      publishInFlight: false,
+      snapshot: { status: "published", version: 2 },
+    });
+    expect(view().kind).toBe("published");
+
+    await advance(30_000);
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledTimes(1);
   });
 
   it("explicit-rejection: shows the reason; a new attempt gets a different id", async () => {
@@ -195,7 +226,8 @@ describe("publication store with the supplied mock", () => {
   });
 
   it("a status error after a confirmed published snapshot keeps the view published", async () => {
-    const { actions, view, entry } = setup("status-check-failure");
+    // Polling off: the manual check below must be the first status read.
+    const { actions, view, entry } = setup("status-check-failure", { polling: false });
 
     const id = published(actions().publish(ANN));
     await advance(120);

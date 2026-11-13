@@ -8,7 +8,9 @@ import {
   type PublicationOperation,
 } from "../mocks";
 import { createJournal, type Journal } from "../persistence/journal";
+import { inertTimers } from "../test/inertTimers";
 import { createPublicationStore, type PublicationStoreApi } from "./publicationStore";
+import { browserTimers } from "./scheduler";
 import { selectAttempts, selectView } from "./selectors";
 
 const ANN = "ann-101";
@@ -94,14 +96,19 @@ function loggingJournal(log: string[], base: Journal = createJournal(sessionStor
 /** Lets settled promises run their continuations (real timers only). */
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-function setup(options: { journal?: Journal } = {}) {
+/**
+ * Polling is off by default: most tests drive every status read by hand. With `polling: true`
+ * the store uses the global (fake) timers and `Date.now()`; see "following".
+ */
+function setup(options: { journal?: Journal; polling?: boolean } = {}) {
   const log: string[] = [];
   const controlled = controlledService(log);
   let clock = 1_000;
   const store = createPublicationStore({
     service: controlled.service,
     journal: options.journal ?? loggingJournal(log),
-    now: () => clock,
+    now: options.polling ? () => Date.now() : () => clock,
+    timers: options.polling ? browserTimers : inertTimers,
   });
   return {
     ...controlled,
@@ -538,6 +545,108 @@ describe("loadAnnouncements", () => {
     await done;
 
     expect(store.getState().announcements).toEqual({ status: "error", items: [] });
+  });
+});
+
+describe("following (status polling)", () => {
+  const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+  function pollingSetup() {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const ctx = setup({ polling: true });
+    const id = ctx.store.getState().publish(ANN) ?? "";
+    const status = (index: number) => {
+      const call = ctx.statuses[index];
+      if (!call) throw new Error(`No getStatus call #${String(index)}`);
+      return call;
+    };
+    return { ...ctx, id, status };
+  }
+
+  it("starts at publish(): first read after 1500 ms while the publish is in flight", async () => {
+    const { statuses, status, entry, id, view } = pollingSetup();
+    expect(entry(id).nextCheckAt).toBe(1_500);
+
+    await advance(1_499);
+    expect(statuses).toHaveLength(0);
+    await advance(1);
+    expect(statuses).toHaveLength(1);
+    expect(entry(id)).toMatchObject({ publishInFlight: true, checkInFlight: true });
+    expect(entry(id).nextCheckAt).toBeUndefined();
+
+    status(0).reply.resolve(snapshot(id, "processing"));
+    await advance(0);
+    expect(entry(id).nextCheckAt).toBe(3_000);
+    expect(view().kind).toBe("processing");
+  });
+
+  it("a manual check during a scheduled read returns the in-flight promise", async () => {
+    const { store, statuses, status, entry, id } = pollingSetup();
+    await advance(1_500);
+
+    const manual = store.getState().check(id);
+    expect(store.getState().check(id)).toBe(manual);
+    expect(statuses).toHaveLength(1);
+
+    status(0).reply.resolve(snapshot(id, "processing"));
+    await manual;
+    expect(entry(id)).toMatchObject({ checkInFlight: false, snapshot: { version: 1 } });
+  });
+
+  it("backs off after a failed read and resets after a successful one", async () => {
+    const { status, entry, id } = pollingSetup();
+    await advance(1_500);
+
+    status(0).reply.reject(new AnnouncementMockError("STATUS_UNAVAILABLE", "r", id));
+    await advance(0);
+    expect(entry(id).nextCheckAt).toBe(2_500);
+
+    await advance(1_000);
+    status(1).reply.resolve(snapshot(id, "processing"));
+    await advance(0);
+    expect(entry(id).nextCheckAt).toBe(4_000);
+  });
+
+  it("stops on not-recorded with no publish in flight; retrySameAttempt follows again", async () => {
+    const { store, publishes, statuses, status, entry, id } = pollingSetup();
+    lastPublish(publishes).reply.reject(new AnnouncementMockError("RESPONSE_LOST", "r", id));
+    await advance(1_500);
+
+    status(0).reply.resolve(null);
+    await advance(0);
+    expect(entry(id).lastError?.kind).toBe("not-recorded");
+    expect(entry(id).nextCheckAt).toBeUndefined();
+    await advance(60_000);
+    expect(statuses).toHaveLength(1);
+
+    expect(store.getState().retrySameAttempt(id)).toBe(true);
+    expect(entry(id).nextCheckAt).toBe(Date.now() + 1_500);
+    await advance(1_500);
+    expect(statuses).toHaveLength(2);
+  });
+
+  it("stops when the publish reply is terminal: no status read is sent", async () => {
+    const { publishes, statuses, entry, id, view } = pollingSetup();
+
+    lastPublish(publishes).reply.resolve(snapshot(id, "rejected"));
+    await advance(0);
+    expect(view().kind).toBe("rejected");
+    expect(entry(id).nextCheckAt).toBeUndefined();
+
+    await advance(60_000);
+    expect(statuses).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops when applySnapshots brings a terminal snapshot", async () => {
+    const { store, statuses, entry, id } = pollingSetup();
+
+    store.getState().applySnapshots([snapshot(id, "published")]);
+    expect(entry(id).nextCheckAt).toBeUndefined();
+
+    await advance(60_000);
+    expect(statuses).toHaveLength(0);
   });
 });
 

@@ -9,11 +9,23 @@ import {
 } from "../domain";
 import type { IAnnouncement, IAnnouncementService, PublicationOperation } from "../mocks";
 import type { Journal } from "../persistence/journal";
+import {
+  browserTimers,
+  createScheduler,
+  documentVisibility,
+  type ReadOutcome,
+  type Timers,
+  type VisibilitySource,
+} from "./scheduler";
 
 export interface PublicationStoreDeps {
   service: IAnnouncementService;
   journal: Journal;
   now: () => number;
+  /** Timers for status polling. Defaults to the global `setTimeout`/`clearTimeout`. */
+  timers?: Timers;
+  /** Pauses polling while hidden. Defaults to `document` visibility. */
+  visibility?: VisibilitySource;
 }
 
 export interface PublicationState {
@@ -38,7 +50,11 @@ export interface PublicationActions {
    * request, no snapshot) with no publish in flight. Returns whether a request was sent.
    */
   retrySameAttempt: (operationId: string) => boolean;
-  /** Reads the status of one operation. Skipped when terminal or when a read is in flight. */
+  /**
+   * Reads the status of one operation. Skipped for terminal or unknown operations. While a read
+   * for this operation is in flight (manual or scheduled), returns that same promise instead of
+   * sending a second request.
+   */
   check: (operationId: string) => Promise<void>;
   /** Applies snapshots; creates entries for operations the store does not know yet. */
   applySnapshots: (snapshots: readonly PublicationOperation[]) => void;
@@ -52,6 +68,27 @@ type EntryUpdate = (entry: OperationEntry) => OperationEntry;
 
 const keep: EntryUpdate = (entry) => entry;
 
+/** One status read in flight. `done` is what `check()` returns; `outcome` feeds the scheduler. */
+interface InFlightCheck {
+  done: Promise<void>;
+  outcome: Promise<ReadOutcome>;
+}
+
+const SKIPPED_CHECK: InFlightCheck = {
+  done: Promise.resolve(),
+  outcome: Promise.resolve("stop"),
+};
+
+const isTerminal = (entry: OperationEntry | undefined): boolean => entry?.snapshot?.version === 2;
+
+function withNextCheckAt(entry: OperationEntry, at: number | undefined): OperationEntry {
+  if (entry.nextCheckAt === at) return entry;
+  if (at !== undefined) return { ...entry, nextCheckAt: at };
+  const next = { ...entry };
+  delete next.nextCheckAt;
+  return next;
+}
+
 function withoutError(entry: OperationEntry): OperationEntry {
   if (!entry.lastError) return entry;
   const next = { ...entry };
@@ -63,9 +100,12 @@ export function createPublicationStore({
   service,
   journal,
   now,
+  timers = browserTimers,
+  visibility = documentVisibility(),
 }: PublicationStoreDeps): PublicationStoreApi {
   return createStore<PublicationStore>()((set, get) => {
     let nextSeq = 0;
+    const inFlightChecks = new Map<string, InFlightCheck>();
 
     const isStale = (epoch: number) => get().epoch !== epoch;
 
@@ -136,8 +176,96 @@ export function createPublicationStore({
       } finally {
         if (!isStale(epoch)) {
           patch(operationId, (current) => ({ ...apply(current), publishInFlight: false }));
+          stopIfTerminal(operationId);
         }
       }
+    }
+
+    /**
+     * One `getStatus` request. Never called while another read for the same operation is in
+     * flight (see `startCheck`). Touches only `checkInFlight`, never `publishInFlight`.
+     */
+    async function readStatus(operationId: string, entry: OperationEntry): Promise<ReadOutcome> {
+      const epoch = get().epoch;
+      const seq = entry.checkSeq + 1;
+      patch(operationId, (current) => ({ ...current, checkInFlight: true, checkSeq: seq }));
+
+      let result:
+        | { kind: "snapshot"; snapshot: PublicationOperation }
+        | { kind: "missing" }
+        | { kind: "error"; error: unknown };
+      try {
+        const snapshot = await service.getStatus(operationId);
+        result = snapshot ? { kind: "snapshot", snapshot } : { kind: "missing" };
+      } catch (error) {
+        result = { kind: "error", error };
+      }
+      inFlightChecks.delete(operationId);
+      if (isStale(epoch)) return "stop";
+
+      // Every update below runs on the entry read fresh from state, not on `entry`.
+      const current = get().operations[operationId];
+      if (!current) return "stop";
+      const at = now();
+      let next: OperationEntry;
+      let outcome: ReadOutcome = "ok";
+      if (result.kind === "snapshot") {
+        next = { ...withoutError(mergeSnapshot(current, result.snapshot)), lastCheckedAt: at };
+      } else if (result.kind === "missing") {
+        // `null` = not recorded (yet). Not a rejection. While the publish request is still in
+        // flight the service may simply not have answered it yet.
+        if (current.publishInFlight || current.checkSeq !== seq) {
+          next = current;
+        } else {
+          next = { ...current, lastError: { kind: "not-recorded", at }, lastCheckedAt: at };
+          // Asking again changes nothing. `retrySameAttempt` follows the operation again.
+          outcome = "stop";
+        }
+      } else {
+        // A failed status read never means "rejected"; it only marks the data as stale.
+        const lastError = { kind: toPublicationError(result.error), at };
+        next = current.checkSeq === seq ? { ...current, lastError } : current;
+        outcome = "failed";
+      }
+      patch(operationId, () => ({ ...next, checkInFlight: false }));
+      return isTerminal(next) ? "stop" : outcome;
+    }
+
+    /** Starts a status read, or joins the one already in flight for this operation. */
+    function startCheck(operationId: string): InFlightCheck {
+      const existing = inFlightChecks.get(operationId);
+      if (existing) return existing;
+      const entry = get().operations[operationId];
+      if (!entry || isTerminal(entry)) return SKIPPED_CHECK;
+
+      const outcome = readStatus(operationId, entry);
+      const check: InFlightCheck = { outcome, done: outcome.then(() => undefined) };
+      inFlightChecks.set(operationId, check);
+      return check;
+    }
+
+    // A future reset/restore must call `scheduler.stopAll()` before following again, so that
+    // reads from the old epoch (which return "stop") cannot end the new following.
+    const scheduler = createScheduler({
+      read: (operationId) => startCheck(operationId).outcome,
+      onSchedule: (operationId, at) => {
+        patch(operationId, (current) => withNextCheckAt(current, at));
+      },
+      now,
+      timers,
+      visibility,
+    });
+
+    /** Follows an unresolved operation. A restored entry ("checking") is read at once. */
+    function follow(operationId: string): void {
+      const entry = get().operations[operationId];
+      if (!entry || isTerminal(entry)) return;
+      const restored = !entry.snapshot && !entry.lastError && !entry.publishInFlight;
+      scheduler.ensure(operationId, { immediate: restored });
+    }
+
+    function stopIfTerminal(operationId: string): void {
+      if (isTerminal(get().operations[operationId])) scheduler.stop(operationId);
     }
 
     /** Creates an attempt. Fully synchronous up to the request, so a double click is a no-op. */
@@ -169,6 +297,8 @@ export function createPublicationStore({
         operations: { ...state.operations, [operationId]: entry },
         publishBlocked: null,
       }));
+      // Follow from the start: a status read can beat a slow publish response.
+      follow(operationId);
       void sendPublish(operationId);
       return operationId;
     }
@@ -205,49 +335,21 @@ export function createPublicationStore({
       retrySameAttempt(operationId) {
         const entry = get().operations[operationId];
         if (!entry || entry.snapshot || !entry.lastError || entry.publishInFlight) return false;
+        // Following may have stopped on "not-recorded"; the retry records the operation again.
+        follow(operationId);
         void sendPublish(operationId);
         return true;
       },
 
-      async check(operationId) {
-        const entry = get().operations[operationId];
-        if (!entry || entry.snapshot?.version === 2 || entry.checkInFlight) return;
-
-        const epoch = get().epoch;
-        const seq = entry.checkSeq + 1;
-        patch(operationId, (current) => ({ ...current, checkInFlight: true, checkSeq: seq }));
-
-        // Every update below runs on the entry read fresh from state, not on `entry`.
-        let apply = keep;
-        try {
-          const snapshot = await service.getStatus(operationId);
-          const at = now();
-          if (snapshot) {
-            apply = (current) => ({
-              ...withoutError(mergeSnapshot(current, snapshot)),
-              lastCheckedAt: at,
-            });
-          } else {
-            // `null` = not recorded (yet). Not a rejection. While the publish request is still
-            // in flight the service may simply not have answered it yet.
-            apply = (current) =>
-              current.publishInFlight || current.checkSeq !== seq
-                ? current
-                : { ...current, lastError: { kind: "not-recorded", at }, lastCheckedAt: at };
-          }
-        } catch (error) {
-          // A failed status read never means "rejected"; it only marks the data as stale.
-          const lastError = { kind: toPublicationError(error), at: now() };
-          apply = (current) => (current.checkSeq === seq ? { ...current, lastError } : current);
-        } finally {
-          if (!isStale(epoch)) {
-            patch(operationId, (current) => ({ ...apply(current), checkInFlight: false }));
-          }
-        }
+      check(operationId) {
+        return startCheck(operationId).done;
       },
 
       applySnapshots(snapshots) {
-        for (const snapshot of snapshots) upsertSnapshot(snapshot);
+        for (const snapshot of snapshots) {
+          upsertSnapshot(snapshot);
+          stopIfTerminal(snapshot.operationId);
+        }
       },
 
       dismissPublishBlocked() {
