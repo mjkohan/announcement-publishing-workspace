@@ -35,6 +35,13 @@ function pendingService(): IAnnouncementService {
   return service;
 }
 
+/** Lets the provider's mount-time `restore()` finish (`pendingService` lists no operations). */
+async function settleRestore(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 /** The `publish` mock of a `pendingService()`, without detaching a method from the service. */
 function publishMock(service: IAnnouncementService): PublishMock {
   const mock = publishMocks.get(service);
@@ -89,7 +96,7 @@ describe("ServiceProvider", () => {
     expect(result.current).toBe(first);
   });
 
-  it("re-renders a memoized view selector after an action, without a render loop", () => {
+  it("re-renders a memoized view selector after an action, without a render loop", async () => {
     const service = pendingService();
     let renders = 0;
     function Status() {
@@ -104,6 +111,7 @@ describe("ServiceProvider", () => {
     }
 
     render(<Status />, { wrapper: wrapperFor(service) });
+    await settleRestore();
     expect(screen.getByRole("button")).toHaveTextContent("idle");
     const rendersAfterMount = renders;
 
@@ -116,12 +124,13 @@ describe("ServiceProvider", () => {
     expect(renders - rendersAfterMount).toBeLessThanOrEqual(2); // StrictMode renders twice
   });
 
-  it("returns stable actions that use the injected service and storage", () => {
+  it("returns stable actions that use the injected service and storage", async () => {
     const service = pendingService();
     const storage = new MemoryStorage();
     const { result, rerender } = renderHook(() => usePublicationActions(), {
       wrapper: wrapperFor(service, storage),
     });
+    await settleRestore();
     const first = result.current;
 
     rerender();
@@ -135,6 +144,19 @@ describe("ServiceProvider", () => {
     expect(publishMock(service)).toHaveBeenCalledWith(ANN, operationId);
     expect(storage.getItem(JOURNAL_STORAGE_KEY)).toContain(String(operationId));
     expect(sessionStorage.getItem(JOURNAL_STORAGE_KEY)).toBeNull();
+  });
+
+  it("restores once on mount in StrictMode", async () => {
+    const listOperations = vi.fn(() => Promise.resolve<PublicationOperation[]>([]));
+    const service: IAnnouncementService = { ...pendingService(), listOperations };
+    const { result } = renderHook(() => usePublicationStore((state) => state.restoreStatus), {
+      wrapper: wrapperFor(service),
+    });
+
+    await settleRestore();
+
+    expect(result.current).toBe("ready");
+    expect(listOperations).toHaveBeenCalledTimes(1);
   });
 
   it("supports shallow selectors that return new objects", () => {
@@ -156,13 +178,14 @@ describe("ServiceProvider", () => {
 });
 
 describe("renderWithProviders", () => {
-  it("uses the passed service and returns the provider's store", () => {
+  it("uses the passed service and returns the provider's store", async () => {
     const service = pendingService();
     function Probe() {
       return <p>{useService() === service ? "injected" : "other"}</p>;
     }
 
     const { store } = renderWithProviders(<Probe />, { service, storage: new MemoryStorage() });
+    await settleRestore();
 
     expect(screen.getByText("injected")).toBeInTheDocument();
     act(() => {

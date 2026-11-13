@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { IAnnouncementService } from "../mocks";
 import { createJournal } from "../persistence/journal";
 import { createPublicationStore } from "../store";
@@ -26,6 +26,12 @@ export function ServiceProvider({ service, storage, children }: ServiceProviderP
       now: () => Date.now(),
     }),
   }));
+
+  // Refresh recovery. `restore()` runs once per store, so StrictMode's second effect run is a
+  // no-op. The work itself (service calls, timers) stays in the store.
+  useEffect(() => {
+    void value.store.getState().restore();
+  }, [value]);
 
   return <PublicationContext value={value}>{children}</PublicationContext>;
 }

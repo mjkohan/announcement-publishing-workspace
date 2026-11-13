@@ -34,14 +34,28 @@ export interface PublicationState {
   announcements: { status: "idle" | "loading" | "ready" | "error"; items: IAnnouncement[] };
   /** Keyed by operationId. An announcement's status is derived from these, never stored. */
   operations: Record<string, OperationEntry>;
-  restore: "idle" | "loading" | "ready" | "degraded";
+  /**
+   * Refresh recovery. "idle" until `restore()` runs; "degraded" when the operation list could
+   * not be read. New attempts are refused until "ready".
+   */
+  restoreStatus: "idle" | "loading" | "ready" | "degraded";
   /** The journal could not be written, so the publish was not sent. */
   publishBlocked: { announcementId: string; at: number } | null;
 }
 
 export interface PublicationActions {
   loadAnnouncements: () => Promise<void>;
-  /** Starts the first attempt. Only from "idle". Returns the new operationId, if any. */
+  /**
+   * Rebuilds operations from the journal and the service after a refresh. Runs once, only when
+   * `restoreStatus` is "idle"; later calls return the running (or a resolved) promise. Never publishes.
+   */
+  restore: () => Promise<void>;
+  /** Runs the restore again. Only when `restoreStatus` is "degraded". */
+  retryRestore: () => Promise<void>;
+  /**
+   * Starts the first attempt. Only from "idle" and once restore is "ready". Returns the new
+   * operationId, if any.
+   */
   publish: (announcementId: string) => string | undefined;
   /** Starts a new attempt with a new operationId. Only from "rejected". */
   startNewAttempt: (announcementId: string) => string | undefined;
@@ -67,6 +81,9 @@ export type PublicationStoreApi = StoreApi<PublicationStore>;
 type EntryUpdate = (entry: OperationEntry) => OperationEntry;
 
 const keep: EntryUpdate = (entry) => entry;
+
+/** Waits before each `listOperations` retry during restore (5 tries in total). */
+export const RESTORE_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000, 4_000];
 
 /** One status read in flight. `done` is what `check()` returns; `outcome` feeds the scheduler. */
 interface InFlightCheck {
@@ -176,7 +193,7 @@ export function createPublicationStore({
       } finally {
         if (!isStale(epoch)) {
           patch(operationId, (current) => ({ ...apply(current), publishInFlight: false }));
-          stopIfTerminal(operationId);
+          settleTerminal(operationId);
         }
       }
     }
@@ -228,7 +245,9 @@ export function createPublicationStore({
         outcome = "failed";
       }
       patch(operationId, () => ({ ...next, checkInFlight: false }));
-      return isTerminal(next) ? "stop" : outcome;
+      if (!isTerminal(next)) return outcome;
+      settleTerminal(operationId);
+      return "stop";
     }
 
     /** Starts a status read, or joins the one already in flight for this operation. */
@@ -244,8 +263,8 @@ export function createPublicationStore({
       return check;
     }
 
-    // A future reset/restore must call `scheduler.stopAll()` before following again, so that
-    // reads from the old epoch (which return "stop") cannot end the new following.
+    // A future reset must call `scheduler.stopAll()` before following again, so that reads from
+    // the old epoch (which return "stop") cannot end the new following.
     const scheduler = createScheduler({
       read: (operationId) => startCheck(operationId).outcome,
       onSchedule: (operationId, at) => {
@@ -264,8 +283,109 @@ export function createPublicationStore({
       scheduler.ensure(operationId, { immediate: restored });
     }
 
-    function stopIfTerminal(operationId: string): void {
-      if (isTerminal(get().operations[operationId])) scheduler.stop(operationId);
+    /**
+     * Once the service reports a terminal snapshot: stop following and drop the journal entry.
+     * Safe, because the service keeps the record and a later restore still lists it.
+     */
+    function settleTerminal(operationId: string): void {
+      if (!isTerminal(get().operations[operationId])) return;
+      scheduler.stop(operationId);
+      journal.remove(operationId);
+    }
+
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => {
+        timers.setTimeout(resolve, ms);
+      });
+
+    /**
+     * `listOperations` with retries. Returns `undefined` when every try failed and `"stale"`
+     * when the epoch changed while waiting.
+     */
+    async function listWithRetry(
+      epoch: number,
+    ): Promise<readonly PublicationOperation[] | "stale" | undefined> {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          const snapshots = await service.listOperations();
+          return isStale(epoch) ? "stale" : snapshots;
+        } catch {
+          // In status-check-failure each failing list consumes one pending failure, so several
+          // failures in a row are expected.
+          if (isStale(epoch)) return "stale";
+        }
+        const delay = RESTORE_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) return undefined;
+        await wait(delay);
+        if (isStale(epoch)) return "stale";
+      }
+    }
+
+    /** Seeds journal entries with no snapshot and no error: their view is "checking". */
+    function seedFromJournal(epoch: number): void {
+      const known = get().operations;
+      const seeded: Record<string, OperationEntry> = {};
+      for (const { operationId, announcementId, createdAt } of journal.read().entries) {
+        if (known[operationId]) continue;
+        seeded[operationId] = {
+          operationId,
+          announcementId,
+          createdAt,
+          seq: nextSeq++,
+          epoch,
+          publishInFlight: false,
+          checkInFlight: false,
+          checkSeq: 0,
+        };
+      }
+      set((state) => ({ operations: { ...state.operations, ...seeded } }));
+    }
+
+    /**
+     * Rebuilds operations after a refresh from the journal and the service. Only reads
+     * (`listOperations`, `getStatus`); never calls `publish`.
+     */
+    async function runRestore(): Promise<void> {
+      const epoch = get().epoch;
+      set({ restoreStatus: "loading" });
+      seedFromJournal(epoch);
+
+      const snapshots = await listWithRetry(epoch);
+      if (snapshots === "stale") return;
+      if (!snapshots) {
+        // Entries stay "checking": a failed list is not a failed read of one operation.
+        set({ restoreStatus: "degraded" });
+        return;
+      }
+
+      // The service is the source of truth: operations the journal does not know are added too.
+      const listed = new Set<string>();
+      for (const snapshot of snapshots) {
+        listed.add(snapshot.operationId);
+        upsertSnapshot(snapshot);
+        settleTerminal(snapshot.operationId);
+      }
+
+      // `null` here gives "not-recorded": the user may resend with the same operationId.
+      const missing = journal
+        .read()
+        .entries.map((entry) => entry.operationId)
+        .filter((operationId) => !listed.has(operationId));
+      await Promise.all(missing.map((operationId) => startCheck(operationId).outcome));
+      if (isStale(epoch)) return;
+
+      set({ restoreStatus: "ready" });
+      for (const entry of Object.values(get().operations)) {
+        if (entry.lastError?.kind !== "not-recorded") follow(entry.operationId);
+      }
+    }
+
+    let restoreRun: Promise<void> | undefined;
+
+    function startRestore(from: "idle" | "degraded"): Promise<void> {
+      if (get().restoreStatus !== from) return restoreRun ?? Promise.resolve();
+      restoreRun = runRestore();
+      return restoreRun;
     }
 
     /** Creates an attempt. Fully synchronous up to the request, so a double click is a no-op. */
@@ -273,6 +393,8 @@ export function createPublicationStore({
       announcementId: string,
       allowedFrom: "idle" | "rejected",
     ): string | undefined {
+      // Until restore is done, existing attempts are unknown: a new one could be a duplicate.
+      if (get().restoreStatus !== "ready") return undefined;
       if (viewKindOf(announcementId) !== allowedFrom) return undefined;
 
       const operationId = createOperationId();
@@ -307,7 +429,7 @@ export function createPublicationStore({
       epoch: 0,
       announcements: { status: "idle", items: [] },
       operations: {},
-      restore: "ready",
+      restoreStatus: "idle",
       publishBlocked: null,
 
       async loadAnnouncements() {
@@ -345,10 +467,18 @@ export function createPublicationStore({
         return startCheck(operationId).done;
       },
 
+      restore() {
+        return startRestore("idle");
+      },
+
+      retryRestore() {
+        return startRestore("degraded");
+      },
+
       applySnapshots(snapshots) {
         for (const snapshot of snapshots) {
           upsertSnapshot(snapshot);
-          stopIfTerminal(snapshot.operationId);
+          settleTerminal(snapshot.operationId);
         }
       },
 

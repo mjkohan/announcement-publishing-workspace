@@ -28,6 +28,8 @@ export function usePublicationStoreShallow<T>(selector: (state: PublicationStore
 
 const pickActions = (state: PublicationStore): PublicationActions => ({
   loadAnnouncements: state.loadAnnouncements,
+  restore: state.restore,
+  retryRestore: state.retryRestore,
   publish: state.publish,
   startNewAttempt: state.startNewAttempt,
   retrySameAttempt: state.retrySameAttempt,

@@ -36,6 +36,8 @@ function setup(scenario: AnnouncementScenario, { polling = true }: { polling?: b
     now: () => Date.now(),
     timers: polling ? browserTimers : inertTimers,
   });
+  // These tests cover publish and check, not refresh recovery (see tests/restore.test.ts).
+  store.setState({ restoreStatus: "ready" });
   const publishSpy = vi.spyOn(service, "publish");
 
   return {

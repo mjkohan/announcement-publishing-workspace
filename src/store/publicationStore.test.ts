@@ -57,13 +57,20 @@ function controlledService(log: string[]) {
     reply: Deferred<PublicationOperation>;
   }[] = [];
   const statuses: { operationId: string; reply: Deferred<PublicationOperation | null> }[] = [];
+  /** `at` is `Date.now()` when the request was made (fake clock in the restore tests). */
+  const lists: { at: number; reply: Deferred<PublicationOperation[]> }[] = [];
   const announcements = deferred<IAnnouncement[]>();
   const service: IAnnouncementService = {
     getAnnouncements: () => {
       log.push("getAnnouncements");
       return announcements.promise;
     },
-    listOperations: () => Promise.resolve([]),
+    listOperations: () => {
+      log.push("listOperations");
+      const reply = deferred<PublicationOperation[]>();
+      lists.push({ at: Date.now(), reply });
+      return reply.promise;
+    },
     publish: (announcementId, operationId) => {
       log.push(`publish:${operationId}`);
       const reply = deferred<PublicationOperation>();
@@ -80,7 +87,7 @@ function controlledService(log: string[]) {
     getScenario: () => "success",
     reset: () => undefined,
   };
-  return { service, publishes, statuses, announcements };
+  return { service, publishes, statuses, lists, announcements };
 }
 
 function loggingJournal(log: string[], base: Journal = createJournal(sessionStorage)): Journal {
@@ -100,7 +107,7 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
  * Polling is off by default: most tests drive every status read by hand. With `polling: true`
  * the store uses the global (fake) timers and `Date.now()`; see "following".
  */
-function setup(options: { journal?: Journal; polling?: boolean } = {}) {
+function setup(options: { journal?: Journal; polling?: boolean; unrestored?: boolean } = {}) {
   const log: string[] = [];
   const controlled = controlledService(log);
   let clock = 1_000;
@@ -110,6 +117,8 @@ function setup(options: { journal?: Journal; polling?: boolean } = {}) {
     now: options.polling ? () => Date.now() : () => clock,
     timers: options.polling ? browserTimers : inertTimers,
   });
+  // Restore is covered in "restore"; these tests start from a restored store.
+  if (!options.unrestored) store.setState({ restoreStatus: "ready" });
   return {
     ...controlled,
     log,
@@ -650,6 +659,209 @@ describe("following (status polling)", () => {
   });
 });
 
+describe("restore", () => {
+  const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+  const listError = () => new AnnouncementMockError("STATUS_UNAVAILABLE", "r");
+
+  function restoreSetup(entries: { operationId: string; announcementId: string }[] = []) {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const journal = createJournal(sessionStorage);
+    for (const entry of entries) journal.add({ ...entry, createdAt: 5_000 });
+    const ctx = setup({ polling: true, unrestored: true });
+    const list = (index: number) => {
+      const call = ctx.lists[index];
+      if (!call) throw new Error(`No listOperations call #${String(index)}`);
+      return call.reply;
+    };
+    const status = (index: number) => {
+      const call = ctx.statuses[index];
+      if (!call) throw new Error(`No getStatus call #${String(index)}`);
+      return call;
+    };
+    const journalIds = () => journal.read().entries.map((entry) => entry.operationId);
+    return { ...ctx, list, status, journalIds };
+  }
+
+  it("runs once: repeated calls share one listOperations and one promise", async () => {
+    const { store, lists, list } = restoreSetup();
+
+    const first = store.getState().restore();
+    expect(store.getState().restore()).toBe(first);
+    expect(store.getState().restoreStatus).toBe("loading");
+    expect(lists).toHaveLength(1);
+
+    list(0).resolve([]);
+    await first;
+    expect(store.getState().restoreStatus).toBe("ready");
+
+    await store.getState().restore();
+    await store.getState().retryRestore();
+    expect(lists).toHaveLength(1);
+  });
+
+  it("seeds journal entries as checking (no snapshot, no error) while the list is pending", () => {
+    const { store, entry, view } = restoreSetup([{ operationId: "op-a", announcementId: ANN }]);
+
+    void store.getState().restore();
+
+    expect(view()).toMatchObject({ kind: "checking", op: { operationId: "op-a" } });
+    expect(entry("op-a")).toMatchObject({ createdAt: 5_000, publishInFlight: false });
+    expect(entry("op-a").snapshot).toBeUndefined();
+    expect(entry("op-a").lastError).toBeUndefined();
+  });
+
+  it("refuses new attempts until ready", async () => {
+    const { store, publishes, list } = restoreSetup();
+    expect(store.getState().publish(ANN)).toBeUndefined();
+
+    const done = store.getState().restore();
+    expect(store.getState().publish(ANN)).toBeUndefined();
+    expect(store.getState().startNewAttempt(ANN)).toBeUndefined();
+    expect(publishes).toHaveLength(0);
+
+    list(0).resolve([]);
+    await done;
+    expect(store.getState().publish(ANN)).toBeDefined();
+  });
+
+  it("retries the list after 500, 1000, 2000 and 4000 ms, staying checking", async () => {
+    const { store, lists, list, view, publishes } = restoreSetup([
+      { operationId: "op-a", announcementId: ANN },
+    ]);
+    const done = store.getState().restore();
+
+    for (const [index, delay] of [500, 1_000, 2_000, 4_000].entries()) {
+      list(index).reject(listError());
+      await advance(delay - 1);
+      expect(lists).toHaveLength(index + 1);
+      expect(view().kind).toBe("checking");
+      await advance(1);
+      expect(lists).toHaveLength(index + 2);
+    }
+    // Five tries: at 0, 500, 1500, 3500 and 7500 ms after the start.
+    expect(lists.map((call) => call.at - 10_000)).toEqual([0, 500, 1_500, 3_500, 7_500]);
+
+    list(4).resolve([snapshot("op-a", "processing")]);
+    await done;
+    expect(store.getState().restoreStatus).toBe("ready");
+    expect(view()).toMatchObject({ kind: "processing", stale: false });
+    expect(publishes).toHaveLength(0);
+  });
+
+  it("becomes degraded after five failed lists; retryRestore recovers", async () => {
+    const { store, lists, list, statuses, status, view, entry, publishes } = restoreSetup([
+      { operationId: "op-a", announcementId: ANN },
+    ]);
+    const done = store.getState().restore();
+    for (let index = 0; index < 5; index += 1) {
+      list(index).reject(listError());
+      await advance(4_000);
+    }
+    await done;
+
+    expect(store.getState().restoreStatus).toBe("degraded");
+    expect(view().kind).toBe("checking");
+    expect(store.getState().publish(ANN)).toBeUndefined();
+    await advance(60_000);
+    expect(statuses).toHaveLength(0);
+    expect(entry("op-a").nextCheckAt).toBeUndefined();
+
+    const retry = store.getState().retryRestore();
+    expect(store.getState().restoreStatus).toBe("loading");
+    expect(lists).toHaveLength(6);
+    list(5).resolve([]);
+    await advance(0);
+    status(0).reply.resolve(snapshot("op-a", "processing"));
+    await retry;
+
+    expect(store.getState().restoreStatus).toBe("ready");
+    expect(view().kind).toBe("processing");
+    expect(publishes).toHaveLength(0);
+  });
+
+  it("adds listed operations the journal does not know, createdAt from the snapshot", async () => {
+    const { store, list, entry, journalIds } = restoreSetup();
+    const done = store.getState().restore();
+
+    list(0).resolve([snapshot("op-x", "processing", "ann-102", "2026-03-01T10:00:00.000Z")]);
+    await done;
+
+    expect(entry("op-x")).toMatchObject({
+      announcementId: "ann-102",
+      createdAt: Date.parse("2026-03-01T10:00:00.000Z"),
+      snapshot: { status: "processing" },
+      nextCheckAt: 10_000 + 1_500,
+    });
+    expect(journalIds()).toEqual([]);
+  });
+
+  it("reads journal entries missing from the list; null means not-recorded", async () => {
+    const { store, list, statuses, status, view, entry, publishes } = restoreSetup([
+      { operationId: "op-a", announcementId: ANN },
+    ]);
+    const done = store.getState().restore();
+
+    list(0).resolve([]);
+    await advance(0);
+    expect(statuses.map((call) => call.operationId)).toEqual(["op-a"]);
+    expect(view().kind).toBe("checking");
+
+    status(0).reply.resolve(null);
+    await done;
+    expect(view()).toMatchObject({ kind: "unconfirmed", notRecorded: true });
+    expect(entry("op-a").nextCheckAt).toBeUndefined();
+    await advance(60_000);
+    expect(statuses).toHaveLength(1);
+    expect(publishes).toHaveLength(0);
+
+    // The user may resend with the same operationId.
+    expect(store.getState().retrySameAttempt("op-a")).toBe(true);
+    expect(publishes.map((call) => call.operationId)).toEqual(["op-a"]);
+  });
+
+  it("removes terminal entries from the journal and follows unresolved ones", async () => {
+    const { store, list, entry, journalIds } = restoreSetup([
+      { operationId: "op-a", announcementId: ANN },
+      { operationId: "op-b", announcementId: "ann-102" },
+    ]);
+    const done = store.getState().restore();
+
+    list(0).resolve([snapshot("op-a", "published"), snapshot("op-b", "processing", "ann-102")]);
+    await done;
+
+    expect(journalIds()).toEqual(["op-b"]);
+    expect(entry("op-a").nextCheckAt).toBeUndefined();
+    expect(entry("op-b").nextCheckAt).toBe(10_000 + 1_500);
+  });
+
+  it("drops the list result when the epoch changes while waiting for it", async () => {
+    const { store, list, entry } = restoreSetup([{ operationId: "op-a", announcementId: ANN }]);
+    const done = store.getState().restore();
+
+    store.setState({ epoch: 1 });
+    list(0).resolve([snapshot("op-a", "published")]);
+    await done;
+
+    expect(store.getState().restoreStatus).toBe("loading");
+    expect(entry("op-a").snapshot).toBeUndefined();
+  });
+
+  it("stops retrying when the epoch changes during a retry wait", async () => {
+    const { store, lists, list } = restoreSetup();
+    const done = store.getState().restore();
+
+    list(0).reject(listError());
+    await advance(0);
+    store.setState({ epoch: 1 });
+    await advance(10_000);
+    await done;
+
+    expect(lists).toHaveLength(1);
+    expect(store.getState().restoreStatus).toBe("loading");
+  });
+});
+
 describe("with the supplied mock service", () => {
   function mockSetup(scenario: Parameters<IAnnouncementService["setScenario"]>[0]) {
     vi.useFakeTimers();
@@ -660,6 +872,7 @@ describe("with the supplied mock service", () => {
       journal: createJournal(sessionStorage),
       now: () => Date.now(),
     });
+    store.setState({ restoreStatus: "ready" });
     const view = () => selectView(ANN)(store.getState());
     return { service, store, view };
   }
