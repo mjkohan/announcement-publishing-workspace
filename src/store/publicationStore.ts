@@ -53,6 +53,11 @@ export interface PublicationActions {
   /** Runs the restore again. Only when `restoreStatus` is "degraded". */
   retryRestore: () => Promise<void>;
   /**
+   * Dev tool: clears the service records, the journal and all operations, starts a new epoch
+   * (late results from before are dropped), then restores again. Returns the new restore.
+   */
+  resetSimulation: () => Promise<void>;
+  /**
    * Starts the first attempt. Only from "idle" and once restore is "ready". Returns the new
    * operationId, if any.
    */
@@ -217,7 +222,9 @@ export function createPublicationStore({
       } catch (error) {
         result = { kind: "error", error };
       }
-      inFlightChecks.delete(operationId);
+      // A read from an older epoch was already dropped from the map by the reset; never remove
+      // a newer in-flight read for the same id.
+      if (!isStale(epoch)) inFlightChecks.delete(operationId);
       if (isStale(epoch)) return "stop";
 
       // Every update below runs on the entry read fresh from state, not on `entry`.
@@ -263,7 +270,7 @@ export function createPublicationStore({
       return check;
     }
 
-    // A future reset must call `scheduler.stopAll()` before following again, so that reads from
+    // `resetSimulation` calls `scheduler.stopAll()` before following again, so that reads from
     // the old epoch (which return "stop") cannot end the new following.
     const scheduler = createScheduler({
       read: (operationId) => startCheck(operationId).outcome,
@@ -473,6 +480,23 @@ export function createPublicationStore({
 
       retryRestore() {
         return startRestore("degraded");
+      },
+
+      resetSimulation() {
+        // Stop first: in-flight scheduler reads are dropped and no timer fires after the reset.
+        scheduler.stopAll();
+        service.reset();
+        // A failed clear is safe: a leftover entry restores as "not-recorded".
+        journal.clear();
+        inFlightChecks.clear();
+        // New epoch: every promise from before the reset drops its result when it settles.
+        set((state) => ({
+          epoch: state.epoch + 1,
+          operations: {},
+          restoreStatus: "idle",
+          publishBlocked: null,
+        }));
+        return startRestore("idle");
       },
 
       applySnapshots(snapshots) {

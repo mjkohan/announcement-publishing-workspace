@@ -85,7 +85,9 @@ function controlledService(log: string[]) {
     },
     setScenario: () => undefined,
     getScenario: () => "success",
-    reset: () => undefined,
+    reset: () => {
+      log.push("reset");
+    },
   };
   return { service, publishes, statuses, lists, announcements };
 }
@@ -859,6 +861,89 @@ describe("restore", () => {
 
     expect(lists).toHaveLength(1);
     expect(store.getState().restoreStatus).toBe("loading");
+  });
+});
+
+describe("resetSimulation", () => {
+  const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+
+  function resetSetup() {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const ctx = setup({ polling: true });
+    const id = ctx.store.getState().publish(ANN) ?? "";
+    const list = (index: number) => {
+      const call = ctx.lists[index];
+      if (!call) throw new Error(`No listOperations call #${String(index)}`);
+      return call.reply;
+    };
+    const status = (index: number) => {
+      const call = ctx.statuses[index];
+      if (!call) throw new Error(`No getStatus call #${String(index)}`);
+      return call.reply;
+    };
+    return { ...ctx, id, list, status };
+  }
+
+  it("resets the service, the journal and the operations, then restores again", async () => {
+    const { store, log, lists, list } = resetSetup();
+    store.setState({ publishBlocked: { announcementId: ANN, at: 0 } });
+
+    const done = store.getState().resetSimulation();
+
+    expect(log).toContain("reset");
+    expect(createJournal(sessionStorage).read().entries).toEqual([]);
+    expect(store.getState()).toMatchObject({
+      epoch: 1,
+      restoreStatus: "loading",
+      publishBlocked: null,
+    });
+    expect(store.getState().operations).toEqual({});
+    expect(lists).toHaveLength(1);
+
+    list(0).resolve([]);
+    await done;
+    expect(store.getState().restoreStatus).toBe("ready");
+  });
+
+  it("drops a publish reply and a status read that settle after the reset", async () => {
+    const { store, publishes, statuses, status, list, id } = resetSetup();
+    await advance(1_500); // scheduled status read in flight
+    const oldCheck = store.getState().check(id);
+    expect(statuses).toHaveLength(1);
+
+    const done = store.getState().resetSimulation();
+    list(0).resolve([]);
+    await done;
+    // The service lists the same id again (a new epoch, a new entry).
+    store.getState().applySnapshots([snapshot(id, "processing")]);
+
+    // A new check is not joined to the read from the old epoch.
+    const newCheck = store.getState().check(id);
+    expect(newCheck).not.toBe(oldCheck);
+    expect(statuses).toHaveLength(2);
+    const before = store.getState().operations;
+
+    status(0).resolve(snapshot(id, "published"));
+    lastPublish(publishes).reply.resolve(snapshot(id, "published"));
+    await oldCheck;
+    await advance(0);
+
+    expect(store.getState().operations[id]).toBe(before[id]);
+    // Settling the old read did not remove the new in-flight read.
+    expect(store.getState().check(id)).toBe(newCheck);
+    expect(statuses).toHaveLength(2);
+  });
+
+  it("stops following: no status read for the old operation after the reset", async () => {
+    const { store, statuses, list } = resetSetup();
+    const done = store.getState().resetSimulation();
+    list(0).resolve([]);
+    await done;
+
+    expect(vi.getTimerCount()).toBe(0);
+    await advance(60_000);
+    expect(statuses).toHaveLength(0);
   });
 });
 

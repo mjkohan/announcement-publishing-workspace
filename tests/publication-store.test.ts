@@ -119,6 +119,32 @@ describe("publication store with the supplied mock", () => {
     expect(statusSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("slow-response: a reset before the publish reply makes the late reply change nothing", async () => {
+    const { service, store, publishSpy, actions, view, operationCount } = setup("slow-response");
+    const statusSpy = vi.spyOn(service, "getStatus");
+    published(actions().publish(ANN)); // reply due at 4.5 s
+
+    await advance(1_000);
+    const restored = actions().resetSimulation();
+    expect(store.getState()).toMatchObject({ epoch: 1, restoreStatus: "loading" });
+    expect(store.getState().operations).toEqual({});
+
+    await advance(100); // the new restore lists the (reset) service: no operations
+    await restored;
+    expect(store.getState().restoreStatus).toBe("ready");
+    const afterReset = store.getState().operations;
+
+    await advance(10_000); // the late publish reply settles at 4.5 s
+    expect(store.getState().operations).toBe(afterReset);
+    expect(operationCount()).toBe(0);
+    expect(view().kind).toBe("idle");
+    expect(store.getState().epoch).toBe(1);
+    expect(createJournal(sessionStorage).read().entries).toEqual([]);
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).not.toHaveBeenCalled();
+    expect(await readOps(service)).toEqual([]);
+  });
+
   it("explicit-rejection: shows the reason; a new attempt gets a different id", async () => {
     const { service, actions, view, entry } = setup("explicit-rejection");
 
