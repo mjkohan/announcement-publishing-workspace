@@ -92,32 +92,7 @@ describe("publication store with the supplied mock", () => {
     );
   });
 
-  it("slow-response: polling shows published before the late publish reply", async () => {
-    const { service, publishSpy, actions, view, entry } = setup("slow-response");
-    const statusSpy = vi.spyOn(service, "getStatus");
-
-    const id = published(actions().publish(ANN));
-    await advance(1_499);
-    expect(view().kind).toBe("submitting");
-
-    // First read at 1.5 s (the operation is complete by then), reply after 100 ms.
-    await advance(1 + 100);
-    expect(view()).toMatchObject({ kind: "published", op: { operationId: id } });
-    expect(entry(id)).toMatchObject({ publishInFlight: true, snapshot: { version: 2 } });
-    expect(entry(id).nextCheckAt).toBeUndefined();
-
-    // The publish reply (v1, captured when the request was sent) arrives at 4.5 s and is ignored.
-    await advance(4_500 - 1_600);
-    expect(entry(id)).toMatchObject({
-      publishInFlight: false,
-      snapshot: { status: "published", version: 2 },
-    });
-    expect(view().kind).toBe("published");
-
-    await advance(30_000);
-    expect(publishSpy).toHaveBeenCalledTimes(1);
-    expect(statusSpy).toHaveBeenCalledTimes(1);
-  });
+  // Polling under slow-response: see tests/scenarios.test.ts.
 
   it("slow-response: a reset before the publish reply makes the late reply change nothing", async () => {
     const { service, store, publishSpy, actions, view, operationCount } = setup("slow-response");
