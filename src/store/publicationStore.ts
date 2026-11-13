@@ -195,9 +195,11 @@ export function createPublicationStore({
         const snapshot = await service.publish(entry.announcementId, operationId);
         apply = (current) => withoutError(mergeSnapshot(current, snapshot));
       } catch (error) {
-        // A lost response means "outcome unknown", never "failed". The snapshot is kept.
+        // A lost response means "outcome unknown", never "failed". Once a status read has
+        // brought a snapshot, the operation is known to be recorded and the error adds nothing
+        // (it would only sit next to a confirmed result).
         const lastError = { kind: toPublicationError(error), at: now() };
-        apply = (current) => ({ ...current, lastError });
+        apply = (current) => (current.snapshot ? current : { ...current, lastError });
       } finally {
         if (!isStale(epoch)) {
           patch(operationId, (current) => ({ ...apply(current), publishInFlight: false }));

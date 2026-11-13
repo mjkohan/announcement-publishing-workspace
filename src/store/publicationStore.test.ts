@@ -470,6 +470,21 @@ describe("check", () => {
     expect(statuses).toHaveLength(1);
   });
 
+  it("ignores a publish error that arrives after a status read confirmed the result", async () => {
+    const { store, publishes, statuses, entry, view } = setup();
+    const id = store.getState().publish(ANN) ?? "";
+
+    const done = store.getState().check(id);
+    statuses[0]?.reply.resolve(snapshot(id, "published"));
+    await done;
+    lastPublish(publishes).reply.reject(new TypeError("Failed to fetch"));
+    await flush();
+
+    expect(entry(id)).toMatchObject({ publishInFlight: false, snapshot: { version: 2 } });
+    expect(entry(id).lastError).toBeUndefined();
+    expect(view().kind).toBe("published");
+  });
+
   it("never lets a late v1 overwrite a terminal snapshot", async () => {
     const { store, publishes, statuses, entry } = setup();
     const id = store.getState().publish(ANN) ?? "";
