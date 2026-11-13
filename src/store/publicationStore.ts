@@ -58,6 +58,16 @@ export interface PublicationActions {
    */
   resetSimulation: () => Promise<void>;
   /**
+   * The UI is mounted: runs `restore()` (once) and, if restore is done, follows every unresolved
+   * operation again. Pair with `disconnect()`. Safe under StrictMode's effect re-run.
+   */
+  connect: () => void;
+  /**
+   * The UI unmounted: stops all polling timers and following. Work in flight settles normally
+   * but follows nothing new until `connect()`.
+   */
+  disconnect: () => void;
+  /**
    * Starts the first attempt. Only from "idle" and once restore is "ready". Returns the new
    * operationId, if any.
    */
@@ -299,8 +309,12 @@ export function createPublicationStore({
       visibility,
     });
 
+    /** `false` after `disconnect()` (the provider unmounted): nothing new is followed. */
+    let connected = true;
+
     /** Follows an unresolved operation. A restored entry ("checking") is read at once. */
     function follow(operationId: string): void {
+      if (!connected) return;
       const entry = get().operations[operationId];
       if (!entry || isTerminal(entry)) return;
       const restored = !entry.snapshot && !entry.lastError && !entry.publishInFlight;
@@ -317,10 +331,34 @@ export function createPublicationStore({
       journal.remove(operationId);
     }
 
+    /** Follows every unresolved operation, except "not-recorded" ones (asking again changes nothing). */
+    function followUnresolved(): void {
+      for (const entry of Object.values(get().operations)) {
+        if (entry.lastError?.kind !== "not-recorded") follow(entry.operationId);
+      }
+    }
+
+    /** Restore retry waits, so a reset can cancel them instead of leaving timers behind. */
+    const pendingWaits = new Set<{ handle: unknown; resolve: () => void }>();
+
     const wait = (ms: number) =>
       new Promise<void>((resolve) => {
-        timers.setTimeout(resolve, ms);
+        const pending = { handle: undefined as unknown, resolve };
+        pending.handle = timers.setTimeout(() => {
+          pendingWaits.delete(pending);
+          resolve();
+        }, ms);
+        pendingWaits.add(pending);
       });
+
+    /** Clears the wait timers and resolves the waits; their restore then exits on the epoch check. */
+    function cancelWaits(): void {
+      for (const pending of pendingWaits) {
+        timers.clearTimeout(pending.handle);
+        pending.resolve();
+      }
+      pendingWaits.clear();
+    }
 
     /**
      * `listOperations` with retries. Returns `undefined` when every try failed and `"stale"`
@@ -399,9 +437,7 @@ export function createPublicationStore({
       if (isStale(epoch)) return;
 
       set({ restoreStatus: "ready" });
-      for (const entry of Object.values(get().operations)) {
-        if (entry.lastError?.kind !== "not-recorded") follow(entry.operationId);
-      }
+      followUnresolved();
     }
 
     let restoreRun: Promise<void> | undefined;
@@ -523,7 +559,21 @@ export function createPublicationStore({
               ? { ...state.announcements, status: "idle" }
               : state.announcements,
         }));
+        // After the epoch bump: a cancelled wait resumes its restore, which then sees it is stale.
+        cancelWaits();
         return startRestore("idle");
+      },
+
+      connect() {
+        connected = true;
+        void startRestore("idle");
+        // Reconnected after a disconnect (StrictMode remount): resume following.
+        if (get().restoreStatus === "ready") followUnresolved();
+      },
+
+      disconnect() {
+        connected = false;
+        scheduler.stopAll();
       },
 
       applySnapshots(snapshots) {

@@ -159,6 +159,31 @@ describe("ServiceProvider", () => {
     expect(listOperations).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps polling after the StrictMode remount and stops every timer on unmount", async () => {
+    vi.useFakeTimers();
+    const processing: PublicationOperation = {
+      operationId: "op-1",
+      announcementId: ANN,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      status: "processing",
+      version: 1,
+    };
+    const listOperations = vi.fn(() => Promise.resolve([processing]));
+    const service: IAnnouncementService = { ...pendingService(), listOperations };
+    const { result, unmount } = renderHook(
+      () => usePublicationStore((state) => state.operations["op-1"]?.nextCheckAt),
+      { wrapper: wrapperFor(service) },
+    );
+
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(listOperations).toHaveBeenCalledTimes(1);
+    expect(result.current).toBe(Date.now() + 1_500);
+    expect(vi.getTimerCount()).toBe(1);
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("supports shallow selectors that return new objects", () => {
     const { result, rerender } = renderHook(
       () =>

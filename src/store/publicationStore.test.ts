@@ -708,6 +708,32 @@ describe("following (status polling)", () => {
     expect(statuses).toHaveLength(2);
   });
 
+  it("disconnect stops every timer; connect resumes following", async () => {
+    const { store, statuses, entry, id } = pollingSetup();
+    expect(vi.getTimerCount()).toBe(1);
+
+    store.getState().disconnect();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(entry(id).nextCheckAt).toBeUndefined();
+    await advance(60_000);
+    expect(statuses).toHaveLength(0);
+
+    store.getState().connect();
+    expect(entry(id).nextCheckAt).toBe(Date.now() + 1_500);
+    await advance(1_500);
+    expect(statuses).toHaveLength(1);
+  });
+
+  it("a publish reply that settles while disconnected starts no timer", async () => {
+    const { store, publishes, id, entry } = pollingSetup();
+    store.getState().disconnect();
+
+    lastPublish(publishes).reply.resolve(snapshot(id, "processing"));
+    await advance(0);
+    expect(entry(id).snapshot?.status).toBe("processing");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("stops when the publish reply is terminal: no status read is sent", async () => {
     const { publishes, statuses, entry, id, view } = pollingSetup();
 
@@ -1021,6 +1047,24 @@ describe("resetSimulation", () => {
     await store.getState().loadAnnouncements();
     expect(log.filter((call) => call === "getAnnouncements")).toHaveLength(2);
     expect(store.getState().announcements).toEqual({ status: "ready", items });
+  });
+
+  it("cancels a restore retry wait: no timer is left behind", async () => {
+    const { store, lists, list } = resetSetup();
+    const done = store.getState().resetSimulation();
+    list(0).reject(new AnnouncementMockError("STATUS_UNAVAILABLE", "r"));
+    await advance(0);
+    expect(vi.getTimerCount()).toBe(1); // the 500 ms retry wait
+
+    const again = store.getState().resetSimulation();
+    expect(vi.getTimerCount()).toBe(0);
+    await done; // the old restore resumed at once and exited on the epoch check
+    list(1).resolve([]);
+    await again;
+
+    await advance(10_000);
+    expect(lists).toHaveLength(2);
+    expect(store.getState().restoreStatus).toBe("ready");
   });
 
   it("stops following: no status read for the old operation after the reset", async () => {
