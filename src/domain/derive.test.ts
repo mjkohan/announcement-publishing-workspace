@@ -50,6 +50,15 @@ describe("deriveAnnouncementView", () => {
       expect(deriveAnnouncementView([op])).toEqual({ kind: "processing", op, stale: true });
     });
 
+    it.each(["unexpected", "not-recorded"] as const)(
+      "is stale after a status read that failed with %s",
+      (kind) => {
+        const op = entry({ snapshot: processing(), lastError: { kind, at: 10 } });
+
+        expect(deriveAnnouncementView([op])).toEqual({ kind: "processing", op, stale: true });
+      },
+    );
+
     it("is not stale for other errors", () => {
       const op = entry({ snapshot: processing(), lastError: { kind: "response-lost", at: 10 } });
 

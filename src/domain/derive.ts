@@ -46,7 +46,9 @@ export function deriveAnnouncementView(ops: readonly OperationEntry[]): Announce
     return {
       kind: "processing",
       op: latest,
-      stale: latest.lastError?.kind === "status-unavailable",
+      // Any failed status read (unavailable, unexpected, not recorded) makes the snapshot
+      // possibly outdated. "response-lost" is a publish error and says nothing about freshness.
+      stale: latest.lastError !== undefined && latest.lastError.kind !== "response-lost",
     };
   }
 
