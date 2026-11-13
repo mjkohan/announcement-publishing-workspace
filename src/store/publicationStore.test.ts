@@ -935,6 +935,23 @@ describe("resetSimulation", () => {
     expect(statuses).toHaveLength(2);
   });
 
+  it("a load in flight during the reset does not leave announcements stuck in loading", async () => {
+    const { store, log, list, announcements } = resetSetup();
+    const items = [{ id: ANN, title: "T", body: "B" }];
+    const oldLoad = store.getState().loadAnnouncements();
+
+    const done = store.getState().resetSimulation();
+    list(0).resolve([]);
+    await done;
+    announcements.resolve(items);
+    await oldLoad;
+    expect(store.getState().announcements.status).toBe("idle"); // the old reply was dropped
+
+    await store.getState().loadAnnouncements();
+    expect(log.filter((call) => call === "getAnnouncements")).toHaveLength(2);
+    expect(store.getState().announcements).toEqual({ status: "ready", items });
+  });
+
   it("stops following: no status read for the old operation after the reset", async () => {
     const { store, statuses, list } = resetSetup();
     const done = store.getState().resetSimulation();

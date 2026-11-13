@@ -495,6 +495,12 @@ export function createPublicationStore({
           operations: {},
           restoreStatus: "idle",
           publishBlocked: null,
+          // A load in flight is dropped by the epoch check; without this, its "loading" status
+          // would stay forever and block every later load.
+          announcements:
+            state.announcements.status === "loading"
+              ? { ...state.announcements, status: "idle" }
+              : state.announcements,
         }));
         return startRestore("idle");
       },
