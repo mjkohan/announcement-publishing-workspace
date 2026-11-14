@@ -38,6 +38,16 @@ function renderCard(op?: OperationEntry) {
   return { ...result, card };
 }
 
+/**
+ * The card title. Not a live region: transitions are announced once, by the global
+ * StatusLiveRegion, so the card adds no second announcement.
+ */
+function expectTitle(card: HTMLElement, title: string) {
+  expect(within(card).getByText(title, { selector: "p" })).toBeInTheDocument();
+  expect(within(card).queryByRole("status")).not.toBeInTheDocument();
+  expect(card.querySelector("[aria-live]")).toBeNull();
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -84,7 +94,7 @@ describe("PublicationStatusCard", () => {
   ])("%s: title and description", (_, op, title, description) => {
     const { card } = renderCard(op);
 
-    expect(within(card).getByRole("status")).toHaveTextContent(title);
+    expectTitle(card, title);
     expect(within(card).getByText(description)).toBeInTheDocument();
     expect(within(card).queryByText(/Couldn't refresh status/)).not.toBeInTheDocument();
   });
@@ -93,7 +103,7 @@ describe("PublicationStatusCard", () => {
     const snapshot = { ...published(), publishedAt: new Date(NOW - 3_000).toISOString() };
     const { card } = renderCard({ ...entry(), snapshot });
 
-    expect(within(card).getByRole("status")).toHaveTextContent("Published");
+    expectTitle(card, "Published");
     const confirmed = within(card).getByText(/Publication confirmed/);
     expect(confirmed).toHaveTextContent("Publication confirmed 3s ago.");
     expect(within(confirmed).getByText("3s ago").tagName).toBe("TIME");
@@ -109,7 +119,7 @@ describe("PublicationStatusCard", () => {
   it("rejected: the reason in a quote", () => {
     const { card } = renderCard({ ...entry(), snapshot: rejected("op-1", "Too long.") });
 
-    expect(within(card).getByRole("status")).toHaveTextContent("Rejected");
+    expectTitle(card, "Rejected");
     expect(within(card).getByText("The service declined this announcement:")).toBeInTheDocument();
     expect(within(card).getByText("Too long.").tagName).toBe("BLOCKQUOTE");
   });
@@ -123,9 +133,7 @@ describe("PublicationStatusCard", () => {
     it("warns, says it is not a failure, and counts down to the next read", () => {
       const { card } = renderCard(stale({ nextCheckAt: NOW + 4_000 }));
 
-      const status = within(card).getByRole("status");
-      expect(status).toHaveTextContent("Processing");
-      expect(status).toHaveTextContent("Couldn't refresh status.");
+      expectTitle(card, "Processing");
 
       const warning = within(card).getByText(/Couldn't refresh status\. Showing/);
       expect(warning).toHaveTextContent(

@@ -14,8 +14,6 @@ interface StatusContent {
   description: ReactNode;
   /** Shown below the description. */
   details?: ReactNode;
-  /** Extra text for screen readers, announced with the title. */
-  srNote?: string;
 }
 
 const ACCENT_CLASSES: Record<AnnouncementViewKind, string> = {
@@ -50,10 +48,7 @@ function contentFor(view: AnnouncementView): StatusContent {
         title: "Processing",
         description:
           "The service accepted this announcement and is publishing it. We'll keep checking automatically.",
-        ...(view.stale && {
-          details: <StaleWarning op={view.op} />,
-          srNote: "Couldn't refresh status.",
-        }),
+        ...(view.stale && { details: <StaleWarning op={view.op} /> }),
       };
     case "published":
       return {
@@ -126,7 +121,7 @@ export interface PublicationStatusCardProps {
 export function PublicationStatusCard({ announcementId }: PublicationStatusCardProps) {
   const view = usePublicationStore(selectView(announcementId));
   const headingId = useId();
-  const { title, description, details, srNote } = contentFor(view);
+  const { title, description, details } = contentFor(view);
   const lastCheckedAt = view.kind === "idle" ? undefined : view.op.lastCheckedAt;
 
   return (
@@ -144,11 +139,8 @@ export function PublicationStatusCard({ announcementId }: PublicationStatusCardP
         Publication status
       </h3>
 
-      {/* Only the title is live: the description holds ticking relative times. */}
-      <p role="status" className="text-lg font-semibold">
-        {title}
-        {srNote && <span className="sr-only"> {srNote}</span>}
-      </p>
+      {/* Not a live region: status changes are announced once by the global StatusLiveRegion. */}
+      <p className="text-lg font-semibold">{title}</p>
       <p className="text-sm break-words">{description}</p>
       {details}
 

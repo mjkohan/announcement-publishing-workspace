@@ -1,4 +1,9 @@
-import { AnnouncementDetail, AnnouncementList, RestoreBanner } from "../features/announcements";
+import {
+  AnnouncementDetail,
+  AnnouncementList,
+  RestoreBanner,
+  StatusLiveRegion,
+} from "../features/announcements";
 
 export function App() {
   return (
@@ -23,6 +28,8 @@ export function App() {
           <AnnouncementDetail />
         </main>
       </div>
+
+      <StatusLiveRegion />
     </div>
   );
 }

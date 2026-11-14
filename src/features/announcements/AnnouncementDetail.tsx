@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { usePublicationStore } from "../../app/hooks";
+import { AttemptHistory } from "./AttemptHistory";
 import { PublicationActions } from "./PublicationActions";
 import { PublicationStatusCard } from "./PublicationStatusCard";
 
@@ -35,6 +36,7 @@ export function AnnouncementDetail() {
       <PublicationStatusCard announcementId={announcement.id} />
       {/* Keyed: a new announcement gets fresh actions, never a dialog left open for another. */}
       <PublicationActions key={announcement.id} announcementId={announcement.id} />
+      <AttemptHistory announcementId={announcement.id} />
     </article>
   );
 }

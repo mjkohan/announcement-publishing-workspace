@@ -9,6 +9,7 @@ import {
 } from "../domain";
 import type { IAnnouncement, IAnnouncementService, PublicationOperation } from "../mocks";
 import type { Journal } from "../persistence/journal";
+import { watchStatusTransitions } from "./statusAnnouncer";
 import {
   browserTimers,
   createScheduler,
@@ -46,6 +47,11 @@ export interface PublicationState {
    * announcements load: the journal's choice if it is still listed, else the first one.
    */
   selectedId: string | undefined;
+  /**
+   * Latest status transition text for the global live region, set by `watchStatusTransitions`.
+   * `id` changes with every message, so the same text can be announced twice.
+   */
+  liveAnnouncement: { id: number; text: string } | null;
 }
 
 export interface PublicationActions {
@@ -143,7 +149,7 @@ export function createPublicationStore({
   timers = browserTimers,
   visibility = documentVisibility(),
 }: PublicationStoreDeps): PublicationStoreApi {
-  return createStore<PublicationStore>()((set, get) => {
+  const store = createStore<PublicationStore>()((set, get) => {
     let nextSeq = 0;
     const inFlightChecks = new Map<string, InFlightCheck>();
 
@@ -504,6 +510,7 @@ export function createPublicationStore({
       restoreStatus: "idle",
       publishBlocked: null,
       selectedId: undefined,
+      liveAnnouncement: null,
 
       async loadAnnouncements() {
         if (get().announcements.status === "loading") return;
@@ -617,4 +624,8 @@ export function createPublicationStore({
       },
     };
   });
+
+  // Lives as long as the store: no unsubscribe needed.
+  watchStatusTransitions(store);
+  return store;
 }
