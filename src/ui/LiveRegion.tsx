@@ -9,7 +9,7 @@ export interface LiveRegionProps {
  */
 export function LiveRegion({ message }: LiveRegionProps) {
   return (
-    <div aria-live="polite" aria-atomic="true" className="sr-only">
+    <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
       {message && <p key={message.id}>{message.text}</p>}
     </div>
   );
