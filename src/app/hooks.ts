@@ -40,6 +40,7 @@ const pickActions = (state: PublicationStore): PublicationActions => ({
   applySnapshots: state.applySnapshots,
   dismissPublishBlocked: state.dismissPublishBlocked,
   selectAnnouncement: state.selectAnnouncement,
+  setScenario: state.setScenario,
 });
 
 /** Store actions. The returned object keeps its reference across renders. */

@@ -16,8 +16,9 @@ export interface ServiceProviderProps {
  * `service` and `storage` are read at mount only; later prop changes are ignored.
  */
 export function ServiceProvider({ service, storage, children }: ServiceProviderProps) {
-  // The initializer is side-effect free (no service call, no storage access): StrictMode may
-  // run it twice in development, and React keeps a single result for every render.
+  // The initializer is side-effect free (no request, no journal access; only the synchronous
+  // `getScenario()` read): StrictMode may run it twice in development, and React keeps a
+  // single result for every render.
   const [value] = useState<PublicationContextValue>(() => ({
     service,
     store: createPublicationStore({

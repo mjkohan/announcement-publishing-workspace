@@ -1260,3 +1260,49 @@ describe("with the supplied mock service", () => {
     expect(view()).toMatchObject({ kind: "processing", stale: false });
   });
 });
+
+describe("scenario (dev tool)", () => {
+  function scenarioSetup() {
+    const service = createAnnouncementMock();
+    service.setScenario("slow-response");
+    const store = createPublicationStore({
+      service,
+      journal: createJournal(sessionStorage),
+      now: () => 1_000,
+      timers: inertTimers,
+    });
+    return { service, store };
+  }
+
+  it("starts from the service's scenario", () => {
+    const { store } = scenarioSetup();
+
+    expect(store.getState().scenario).toBe("slow-response");
+  });
+
+  it("setScenario sets it on the service", () => {
+    const { service, store } = scenarioSetup();
+
+    store.getState().setScenario("overlapping");
+
+    expect(service.getScenario()).toBe("overlapping");
+    expect(store.getState().scenario).toBe("overlapping");
+  });
+
+  it("ignores an unknown scenario", () => {
+    const { service, store } = scenarioSetup();
+
+    store.getState().setScenario("nope" as never);
+
+    expect(service.getScenario()).toBe("slow-response");
+    expect(store.getState().scenario).toBe("slow-response");
+  });
+
+  it("resetSimulation restores the default scenario", () => {
+    const { store } = scenarioSetup();
+
+    void store.getState().resetSimulation();
+
+    expect(store.getState().scenario).toBe("success");
+  });
+});

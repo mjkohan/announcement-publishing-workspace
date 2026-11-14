@@ -7,7 +7,12 @@ import {
   type AnnouncementViewKind,
   type OperationEntry,
 } from "../domain";
-import type { IAnnouncement, IAnnouncementService, PublicationOperation } from "../mocks";
+import type {
+  AnnouncementScenario,
+  IAnnouncement,
+  IAnnouncementService,
+  PublicationOperation,
+} from "../mocks";
 import type { Journal } from "../persistence/journal";
 import { watchStatusTransitions } from "./statusAnnouncer";
 import {
@@ -52,6 +57,8 @@ export interface PublicationState {
    * `id` changes with every message, so the same text can be announced twice.
    */
   liveAnnouncement: { id: number; text: string } | null;
+  /** Dev tool: the mock's scenario for new operations, as last read from the service. */
+  scenario: AnnouncementScenario;
 }
 
 export interface PublicationActions {
@@ -102,6 +109,8 @@ export interface PublicationActions {
   dismissPublishBlocked: () => void;
   /** Selects a listed announcement and persists the choice. Unknown ids are ignored. */
   selectAnnouncement: (announcementId: string) => void;
+  /** Dev tool: sets the mock's scenario. It applies to new operations only. */
+  setScenario: (scenario: AnnouncementScenario) => void;
 }
 
 export type PublicationStore = PublicationState & PublicationActions;
@@ -510,6 +519,8 @@ export function createPublicationStore({
       restoreStatus: "idle",
       publishBlocked: null,
       selectedId: undefined,
+      // A synchronous read of the service's own setting: no request, safe to run twice.
+      scenario: service.getScenario(),
       liveAnnouncement: null,
 
       async loadAnnouncements() {
@@ -578,6 +589,8 @@ export function createPublicationStore({
           operations: {},
           restoreStatus: "idle",
           publishBlocked: null,
+          // `reset()` restores the default scenario.
+          scenario: service.getScenario(),
           // A load in flight is dropped by the epoch check; without this, its "loading" status
           // would stay forever and block every later load.
           announcements:
@@ -617,6 +630,15 @@ export function createPublicationStore({
         set({ selectedId: announcementId });
         // A failed write only loses the choice after a refresh.
         journal.setSelectedId(announcementId);
+      },
+
+      setScenario(scenario) {
+        try {
+          service.setScenario(scenario);
+        } catch {
+          // Unknown name (RangeError): keep the current scenario.
+        }
+        set({ scenario: service.getScenario() });
       },
 
       dismissPublishBlocked() {

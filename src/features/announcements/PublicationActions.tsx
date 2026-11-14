@@ -2,7 +2,7 @@ import { useId, useRef } from "react";
 import { usePublicationActions, usePublicationStore } from "../../app/hooks";
 import { assertNever, type OperationEntry } from "../../domain";
 import { selectView } from "../../store";
-import { Button } from "../../ui";
+import { Button, ConfirmDialog, type ConfirmDialogHandle } from "../../ui";
 
 const ROW = "flex flex-wrap items-center gap-2";
 const HELP = "text-xs text-slate-600 dark:text-slate-400";
@@ -168,20 +168,8 @@ function StartNewAttempt({
   onStarted,
 }: StartNewAttemptProps) {
   const { startNewAttempt } = usePublicationActions();
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  const dialogRef = useRef<ConfirmDialogHandle>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  const titleId = useId();
-  const descriptionId = useId();
-
-  const open = () => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    dialog.returnValue = "";
-    dialog.showModal();
-    // The safe choice gets focus first.
-    cancelRef.current?.focus();
-  };
 
   return (
     <>
@@ -190,49 +178,22 @@ function StartNewAttempt({
         disabled={disabled}
         aria-describedby={describedBy}
         aria-haspopup="dialog"
-        onClick={open}
+        onClick={() => dialogRef.current?.open()}
       >
         Start new attempt…
       </Button>
 
-      <dialog
+      <ConfirmDialog
         ref={dialogRef}
-        aria-labelledby={titleId}
-        aria-describedby={descriptionId}
-        onClose={(event) => {
-          // Cancel and Esc return focus to the trigger. A confirm moves it in its own handler:
-          // the new attempt unmounts this dialog, maybe before its "close" event fires.
-          if (event.currentTarget.returnValue !== "confirm") triggerRef.current?.focus();
+        title="Start a new attempt?"
+        description="This creates a new publication attempt with a new ID."
+        confirmLabel="Start new attempt"
+        returnFocusRef={triggerRef}
+        onConfirm={() => {
+          startNewAttempt(announcementId);
+          onStarted();
         }}
-        className="m-auto w-[calc(100%-2rem)] max-w-sm rounded-lg border border-slate-200 bg-white p-4 text-slate-900 shadow-lg backdrop:bg-slate-950/50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-      >
-        <h2 id={titleId} className="text-base font-semibold">
-          Start a new attempt?
-        </h2>
-        <p id={descriptionId} className="mt-2 text-sm">
-          This creates a new publication attempt with a new ID.
-        </p>
-        <div className="mt-4 flex flex-wrap justify-end gap-2">
-          <Button
-            ref={cancelRef}
-            variant="secondary"
-            onClick={() => {
-              dialogRef.current?.close("cancel");
-            }}
-          >
-            Cancel
-          </Button>
-          <Button
-            onClick={() => {
-              dialogRef.current?.close("confirm");
-              startNewAttempt(announcementId);
-              onStarted();
-            }}
-          >
-            Start new attempt
-          </Button>
-        </div>
-      </dialog>
+      />
     </>
   );
 }
