@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { usePublicationStore } from "../../app/hooks";
+import { PublicationActions } from "./PublicationActions";
 import { PublicationStatusCard } from "./PublicationStatusCard";
 
 /** The selected announcement: title, id, full body and its publication status. */
@@ -32,6 +33,8 @@ export function AnnouncementDetail() {
       </header>
       <p className="text-sm leading-relaxed break-words whitespace-pre-line">{announcement.body}</p>
       <PublicationStatusCard announcementId={announcement.id} />
+      {/* Keyed: a new announcement gets fresh actions, never a dialog left open for another. */}
+      <PublicationActions key={announcement.id} announcementId={announcement.id} />
     </article>
   );
 }

@@ -1,10 +1,10 @@
-import type { ButtonHTMLAttributes } from "react";
+import type { ComponentPropsWithRef } from "react";
 import { cx } from "./cx";
 import { Spinner } from "./Spinner";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost";
 
-export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends ComponentPropsWithRef<"button"> {
   variant?: ButtonVariant;
   /** Shows a spinner, sets `aria-busy` and disables the button. The label stays. */
   loading?: boolean;
