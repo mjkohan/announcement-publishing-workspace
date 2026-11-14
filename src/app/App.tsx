@@ -1,4 +1,4 @@
-import { AnnouncementList, RestoreBanner } from "../features/announcements";
+import { AnnouncementDetail, AnnouncementList, RestoreBanner } from "../features/announcements";
 
 export function App() {
   return (
@@ -20,10 +20,7 @@ export function App() {
 
         <main className="min-w-0 space-y-4 px-4 py-4 md:px-6">
           <RestoreBanner />
-          <h2 className="text-lg font-semibold">Details</h2>
-          <p className="text-sm text-slate-600 dark:text-slate-400">
-            Select an announcement to see its details.
-          </p>
+          <AnnouncementDetail />
         </main>
       </div>
     </div>

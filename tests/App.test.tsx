@@ -30,6 +30,10 @@ function pendingRestore() {
 
 const nav = () => screen.getByRole("navigation", { name: "Announcements" });
 
+/** The restore banner: the live region that holds the restoring message. */
+const restoreBanner = (main: HTMLElement) =>
+  within(main).getByText("Restoring publication status…").closest("[role=status]");
+
 describe("App layout", () => {
   it("has the header, navigation and main landmarks with one h1", () => {
     renderWithProviders(<App />);
@@ -81,11 +85,11 @@ describe("restore banner", () => {
     renderWithProviders(<App />);
     const main = screen.getByRole("main");
 
-    expect(within(main).getByRole("status")).toHaveTextContent("Restoring publication status…");
+    expect(restoreBanner(main)).toHaveTextContent("Restoring publication status…");
 
     // The mock lists operations after ~100 ms.
     await vi.waitFor(() => {
-      expect(within(main).queryByRole("status")).not.toBeInTheDocument();
+      expect(within(main).queryByText("Restoring publication status…")).not.toBeInTheDocument();
     });
   });
 
@@ -108,6 +112,6 @@ describe("restore banner", () => {
     await user.click(within(alert).getByRole("button", { name: "Retry" }));
 
     expect(listOperations).toHaveBeenCalledTimes(2);
-    expect(within(main).getByRole("status")).toHaveTextContent("Restoring publication status…");
+    expect(restoreBanner(main)).toHaveTextContent("Restoring publication status…");
   });
 });

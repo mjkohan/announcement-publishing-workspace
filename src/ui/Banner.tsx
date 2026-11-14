@@ -10,6 +10,12 @@ export interface BannerProps {
   /** Shown after the message, for example a `Button`. Wraps below it on narrow screens. */
   action?: ReactNode;
   children: ReactNode;
+  /**
+   * Default `true`: "info" is a polite live region (`status`), the other tones are `alert`.
+   * Set `false` for text that changes on its own (a countdown), so it is not announced on
+   * every change.
+   */
+  live?: boolean;
   className?: string;
 }
 
@@ -19,11 +25,18 @@ const TONE_CLASSES: Record<BannerTone, string> = {
   error: "border-status-rejected/30 bg-status-rejected-bg text-status-rejected",
 };
 
-/** Inline message. "info" is a polite live region (`status`); the other tones are `alert`. */
-export function Banner({ tone = "info", icon, action, children, className }: BannerProps) {
+/** Inline message, a live region by default (see `live`). */
+export function Banner({
+  tone = "info",
+  icon,
+  action,
+  children,
+  live = true,
+  className,
+}: BannerProps) {
   return (
     <div
-      role={tone === "info" ? "status" : "alert"}
+      role={live ? (tone === "info" ? "status" : "alert") : undefined}
       className={cx(
         "flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border px-3 py-2 text-sm",
         TONE_CLASSES[tone],
