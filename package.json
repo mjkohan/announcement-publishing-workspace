@@ -18,6 +18,8 @@
     "verify:mocks": "node scripts/verify-mocks.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "coverage": "vitest run --coverage",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run verify:mocks && npm test",
     "prepare": "husky"
@@ -31,6 +33,7 @@
     "@commitlint/cli": "^21.2.4",
     "@commitlint/config-conventional": "^21.2.4",
     "@eslint/js": "^9.39.5",
+    "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "^4.3.5",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",

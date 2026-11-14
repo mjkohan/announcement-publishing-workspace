@@ -43,6 +43,24 @@ jobs:
           --to ${{ github.event.pull_request.head.sha }}
           --verbose
 
-  # e2e: Playwright job goes here later (needs: check).
+  e2e:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # The config builds the app and starts `vite preview` on port 4173 (webServer).
+      - run: npm run test:e2e
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
 
   # deploy: deploy job goes here later (needs: [check, e2e], main branch only).

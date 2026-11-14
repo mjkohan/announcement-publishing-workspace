@@ -1,6 +1,6 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -9,5 +9,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["src/test/setup.ts"],
     restoreMocks: true,
+    // Playwright specs run with `npm run test:e2e`, not Vitest.
+    exclude: [...configDefaults.exclude, "e2e/**"],
   },
 });
