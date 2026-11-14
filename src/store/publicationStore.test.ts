@@ -643,6 +643,81 @@ describe("loadAnnouncements", () => {
   });
 });
 
+describe("selection", () => {
+  const ITEMS: IAnnouncement[] = [
+    { id: "ann-101", title: "A", body: "A" },
+    { id: "ann-102", title: "B", body: "B" },
+  ];
+
+  async function loaded(stored?: string) {
+    const journal = createJournal(sessionStorage);
+    if (stored !== undefined) journal.setSelectedId(stored);
+    const ctx = setup({ journal });
+    const done = ctx.store.getState().loadAnnouncements();
+    ctx.announcements.resolve(ITEMS);
+    await done;
+    return { ...ctx, journal };
+  }
+
+  it("is undefined until the announcements load", () => {
+    const { store } = setup();
+
+    expect(store.getState().selectedId).toBeUndefined();
+  });
+
+  it("restores the journal's selection when it is still listed", async () => {
+    const { store, journal } = await loaded("ann-102");
+
+    expect(store.getState().selectedId).toBe("ann-102");
+    expect(journal.getSelectedId()).toBe("ann-102");
+  });
+
+  it.each([
+    ["nothing stored", undefined],
+    ["an unlisted id", "ann-999"],
+  ])("falls back to the first announcement with %s, and persists it", async (_, stored) => {
+    const { store, journal } = await loaded(stored);
+
+    expect(store.getState().selectedId).toBe("ann-101");
+    expect(journal.getSelectedId()).toBe("ann-101");
+  });
+
+  it("selectAnnouncement selects and persists a listed id; ignores an unknown one", async () => {
+    const { store, journal } = await loaded();
+
+    store.getState().selectAnnouncement("ann-102");
+    expect(store.getState().selectedId).toBe("ann-102");
+    expect(journal.getSelectedId()).toBe("ann-102");
+
+    store.getState().selectAnnouncement("ann-999");
+    expect(store.getState().selectedId).toBe("ann-102");
+    expect(journal.getSelectedId()).toBe("ann-102");
+  });
+
+  it("keeps the selection and the journal entries apart", async () => {
+    const { store, journal } = await loaded();
+    journal.add({ operationId: "op-1", announcementId: "ann-101", createdAt: 1 });
+
+    store.getState().selectAnnouncement("ann-102");
+
+    expect(journal.read()).toEqual({
+      schema: 1,
+      entries: [{ operationId: "op-1", announcementId: "ann-101", createdAt: 1 }],
+      selectedId: "ann-102",
+    });
+  });
+
+  it("resetSimulation keeps the selection, in state and in the journal", async () => {
+    const { store, journal } = await loaded();
+    store.getState().selectAnnouncement("ann-102");
+
+    void store.getState().resetSimulation();
+
+    expect(store.getState().selectedId).toBe("ann-102");
+    expect(journal.read()).toEqual({ schema: 1, entries: [], selectedId: "ann-102" });
+  });
+});
+
 describe("following (status polling)", () => {
   const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 

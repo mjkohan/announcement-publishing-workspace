@@ -41,6 +41,11 @@ export interface PublicationState {
   restoreStatus: "idle" | "loading" | "ready" | "degraded";
   /** The journal could not be written, so the publish was not sent. */
   publishBlocked: { announcementId: string; at: number } | null;
+  /**
+   * Announcement shown in the details (UI state, persisted in the journal). Set when the
+   * announcements load: the journal's choice if it is still listed, else the first one.
+   */
+  selectedId: string | undefined;
 }
 
 export interface PublicationActions {
@@ -89,6 +94,8 @@ export interface PublicationActions {
   /** Applies snapshots; creates entries for operations the store does not know yet. */
   applySnapshots: (snapshots: readonly PublicationOperation[]) => void;
   dismissPublishBlocked: () => void;
+  /** Selects a listed announcement and persists the choice. Unknown ids are ignored. */
+  selectAnnouncement: (announcementId: string) => void;
 }
 
 export type PublicationStore = PublicationState & PublicationActions;
@@ -496,6 +503,7 @@ export function createPublicationStore({
       operations: {},
       restoreStatus: "idle",
       publishBlocked: null,
+      selectedId: undefined,
 
       async loadAnnouncements() {
         if (get().announcements.status === "loading") return;
@@ -504,7 +512,14 @@ export function createPublicationStore({
         try {
           const items = await service.getAnnouncements();
           if (isStale(epoch)) return;
-          set({ announcements: { status: "ready", items } });
+          const listed = (id: string | undefined) =>
+            id !== undefined && items.some((item) => item.id === id);
+          const current = get().selectedId;
+          const stored = journal.getSelectedId();
+          const selectedId = listed(current) ? current : listed(stored) ? stored : items[0]?.id;
+          set({ announcements: { status: "ready", items }, selectedId });
+          // A failed write only loses the choice after a refresh.
+          if (selectedId !== stored) journal.setSelectedId(selectedId);
         } catch {
           if (isStale(epoch)) return;
           set((state) => ({ announcements: { ...state.announcements, status: "error" } }));
@@ -546,6 +561,9 @@ export function createPublicationStore({
         service.reset();
         // A failed clear is safe: a leftover entry restores as "not-recorded".
         journal.clear();
+        // The clear also dropped the selection; the user keeps looking at the same announcement.
+        const { selectedId } = get();
+        if (selectedId !== undefined) journal.setSelectedId(selectedId);
         inFlightChecks.clear();
         // New epoch: every promise from before the reset drops its result when it settles.
         set((state) => ({
@@ -584,6 +602,14 @@ export function createPublicationStore({
           upsertSnapshot(snapshot);
           settleTerminal(snapshot.operationId);
         }
+      },
+
+      selectAnnouncement(announcementId) {
+        if (!get().announcements.items.some((item) => item.id === announcementId)) return;
+        if (get().selectedId === announcementId) return;
+        set({ selectedId: announcementId });
+        // A failed write only loses the choice after a refresh.
+        journal.setSelectedId(announcementId);
       },
 
       dismissPublishBlocked() {
