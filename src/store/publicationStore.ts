@@ -58,8 +58,9 @@ export interface PublicationActions {
    */
   resetSimulation: () => Promise<void>;
   /**
-   * The UI is mounted: runs `restore()` (once) and, if restore is done, follows every unresolved
-   * operation again. Pair with `disconnect()`. Safe under StrictMode's effect re-run.
+   * The UI is mounted: loads the announcements (only while their status is "idle"), runs
+   * `restore()` (once) and, if restore is done, follows every unresolved operation again.
+   * Pair with `disconnect()`. Safe under StrictMode's effect re-run.
    */
   connect: () => void;
   /**
@@ -566,6 +567,8 @@ export function createPublicationStore({
 
       connect() {
         connected = true;
+        // Only the first load: an "error" is retried by the user, a "ready" list stays.
+        if (get().announcements.status === "idle") void get().loadAnnouncements();
         void startRestore("idle");
         // Reconnected after a disconnect (StrictMode remount): resume following.
         if (get().restoreStatus === "ready") followUnresolved();

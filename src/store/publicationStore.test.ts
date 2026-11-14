@@ -610,6 +610,37 @@ describe("loadAnnouncements", () => {
 
     expect(store.getState().announcements).toEqual({ status: "error", items: [] });
   });
+
+  it("connect loads them once; a later connect does not reload a ready list", async () => {
+    const { store, announcements, log } = setup();
+    const loads = () => log.filter((call) => call === "getAnnouncements").length;
+
+    store.getState().connect();
+    store.getState().disconnect();
+    store.getState().connect();
+    expect(loads()).toBe(1);
+
+    announcements.resolve([{ id: ANN, title: "T", body: "B" }]);
+    await flush();
+    expect(store.getState().announcements.status).toBe("ready");
+
+    store.getState().disconnect();
+    store.getState().connect();
+    expect(loads()).toBe(1);
+  });
+
+  it("connect does not retry a failed load; the user does", async () => {
+    const { store, announcements, log } = setup();
+
+    store.getState().connect();
+    announcements.reject(new Error("offline"));
+    await flush();
+    expect(store.getState().announcements.status).toBe("error");
+
+    store.getState().disconnect();
+    store.getState().connect();
+    expect(log.filter((call) => call === "getAnnouncements")).toHaveLength(1);
+  });
 });
 
 describe("following (status polling)", () => {

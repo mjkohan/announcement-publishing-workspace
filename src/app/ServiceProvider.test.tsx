@@ -197,7 +197,8 @@ describe("ServiceProvider", () => {
 
     rerender();
 
-    expect(result.current).toEqual({ epoch: 0, status: "idle" });
+    // The provider's connect() starts the announcement load on mount.
+    expect(result.current).toEqual({ epoch: 0, status: "loading" });
     expect(result.current).toBe(first);
   });
 });
