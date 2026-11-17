@@ -6,7 +6,7 @@
 
 A React + TypeScript workspace that publishes one of three announcements through a simulated service, follows each attempt to its outcome, and recovers safely after failures or a page refresh, without creating duplicate publications.
 
-The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md).
+The original brief is in [docs/ASSIGNMENT.md](docs/ASSIGNMENT.md). Each requirement is mapped to its code and tests in [docs/requirements-traceability.md](docs/requirements-traceability.md).
 
 ## Quick start
 
