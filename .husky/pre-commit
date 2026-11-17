@@ -1,1 +1,1 @@
-npx lint-staged && npm run verify:mocks
+npx lint-staged

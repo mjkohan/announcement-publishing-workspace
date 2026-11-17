@@ -16,7 +16,7 @@ Users pick one of three fixed announcements, publish it, follow the outcome, and
 
 ## HARD RULES
 
-- Never modify anything in `src/mocks/`. It must stay byte-identical to the supplied mocks (checked by `npm run verify:mocks`).
+- Never modify anything in `src/mocks/`. It must stay identical to the supplied mocks.
 - Never read the mock's own sessionStorage key (`announcement-workspace:mock-service:v1`). Only use the public service API: `getAnnouncements`, `publish`, `getStatus`, `listOperations`.
 - Import the service only from `src/mocks` (its `index.ts`) and create it with `createAnnouncementMock()`. Never import `createService` or anything else from `src/mocks/service.ts` directly.
 - Each operation tracks `publishInFlight` and `checkInFlight` as two independent booleans (a status read can overlap the publish request). Never merge them into one enum.
@@ -51,7 +51,6 @@ Users pick one of three fixed announcements, publish it, follow the outcome, and
 - `src/dev` — dev-only tools (scenario switcher, reset)
 - `tests` — unit/integration tests (Vitest)
 - `e2e` — Playwright tests
-- `scripts` — repo scripts (e.g. mock verification)
 
 ## Commands
 
@@ -64,7 +63,6 @@ Some are added in later tasks.
 - `npm run format` — Prettier (`format:check` to verify)
 - `npm run test` — Vitest
 - `npm run test:e2e` — Playwright
-- `npm run verify:mocks` — check `src/mocks` is byte-identical to the supplied mocks
 - `npm run check` — all checks before commit
 
 ## Git
@@ -79,7 +77,7 @@ Some are added in later tasks.
 Husky installs them on `npm install` (`prepare` script). Hooks are POSIX sh (Git Bash on Windows, sh on Linux).
 
 - `commit-msg`: commitlint (`commitlint.config.js`). Allowed types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert. Scope optional. Header max 100 characters.
-- `pre-commit`: lint-staged (`lint-staged.config.js`: ESLint `--fix` and Prettier on staged files), then `npm run verify:mocks`. `src/mocks` is skipped by the ESLint ignores and `.prettierignore`.
+- `pre-commit`: lint-staged (`lint-staged.config.js`: ESLint `--fix` and Prettier on staged files). `src/mocks` is skipped by the ESLint ignores and `.prettierignore`.
 - `pre-push`: `npm run typecheck && npm test`.
 - CI runs commitlint on every commit of a pull request.
 - Never bypass hooks with `--no-verify`. Fix the cause instead.

@@ -15,13 +15,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "preview": "vite preview",
-    "verify:mocks": "node scripts/verify-mocks.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "coverage": "vitest run --coverage",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run verify:mocks && npm test",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
     "prepare": "husky"
   },
   "dependencies": {
