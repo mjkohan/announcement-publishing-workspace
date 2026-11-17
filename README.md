@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/mjkohan/announcement-publishing-workspace/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/mjkohan/announcement-publishing-workspace/actions/workflows/ci.yml)
 
-**Live demo:** _coming soon_ <!-- TODO: add the deployed URL -->
+**Live demo:** https://mjkohan.github.io/announcement-publishing-workspace/
 
 A React + TypeScript workspace that publishes one of three announcements through a simulated service, follows each attempt to its outcome, and recovers safely after failures or a page refresh, without creating duplicate publications.
 
