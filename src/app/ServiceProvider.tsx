@@ -28,13 +28,10 @@ export function ServiceProvider({ service, storage, children }: ServiceProviderP
     }),
   }));
 
-  // `connect()` runs the refresh recovery (once per store) and resumes following; `disconnect()`
-  // stops all polling on unmount. StrictMode's connect, disconnect, connect still sends one
-  // `listOperations` and ends connected. The work itself (service calls, timers) stays in the store.
+  // `connect()` loads the announcements and runs the refresh recovery, once per store: StrictMode's
+  // second effect run sends no second `listOperations`. The work itself stays in the store.
   useEffect(() => {
-    const { connect, disconnect } = value.store.getState();
-    connect();
-    return disconnect;
+    value.store.getState().connect();
   }, [value]);
 
   return <PublicationContext value={value}>{children}</PublicationContext>;

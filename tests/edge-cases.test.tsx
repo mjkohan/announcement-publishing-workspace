@@ -14,7 +14,6 @@ const OPERATION_ID = /^op-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}
 const nav = () => screen.getByRole("navigation", { name: "Announcements" });
 const main = () => screen.getByRole("main");
 const actions = () => within(main()).getByRole("group", { name: "Publication actions" });
-const card = () => within(main()).getByRole("region", { name: "Publication status" });
 
 /** Waits for the list and for restore to finish (real timers). */
 async function ready(store: PublicationStoreApi) {
@@ -36,12 +35,6 @@ function spiedMock() {
   const listOperations = vi.fn<IAnnouncementService["listOperations"]>(() => mock.listOperations());
   const service: IAnnouncementService = { ...mock, publish, getStatus, listOperations };
   return { service, publish, getStatus, listOperations };
-}
-
-/** Makes `document.hidden` return `hidden` and fires `visibilitychange`. */
-function setHidden(hidden: boolean) {
-  vi.spyOn(document, "hidden", "get").mockReturnValue(hidden);
-  document.dispatchEvent(new Event("visibilitychange"));
 }
 
 afterEach(() => {
@@ -134,42 +127,8 @@ describe("rapid clicks", () => {
   });
 });
 
-describe("tab hidden during processing", () => {
-  it("makes no status read while hidden and reads at once when visible", async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    const { service, getStatus } = spiedMock();
-    renderWithProviders(<App />, { service });
-    await act(() => vi.advanceTimersByTimeAsync(200));
-
-    await user.click(within(actions()).getByRole("button", { name: "Publish" }));
-    // The publish reply (120 ms) brings "processing"; the first poll would be at 1500 ms.
-    await act(() => vi.advanceTimersByTimeAsync(200));
-    expect(within(card()).getByText("Processing", { exact: true })).toBeInTheDocument();
-
-    act(() => {
-      setHidden(true);
-    });
-    // Longer than the publication (2.5 s): only the paused polling keeps it "Processing".
-    await act(() => vi.advanceTimersByTimeAsync(10_000));
-    expect(getStatus).not.toHaveBeenCalled();
-    expect(within(card()).getByText("Processing", { exact: true })).toBeInTheDocument();
-
-    act(() => {
-      setHidden(false);
-    });
-    expect(getStatus).toHaveBeenCalledTimes(1);
-    await act(() => vi.advanceTimersByTimeAsync(100));
-    expect(within(card()).getByText("Published", { exact: true })).toBeInTheDocument();
-
-    // Terminal: following stopped, no further reads.
-    await act(() => vi.advanceTimersByTimeAsync(10_000));
-    expect(getStatus).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("StrictMode", () => {
-  it("restores once and runs one polling loop per operation", async () => {
+  it("restores once and reads nothing on its own afterwards", async () => {
     vi.useFakeTimers();
     // The tab before the refresh: one recorded attempt for ann-101 (polling off).
     const before = createPublicationStore({
@@ -207,13 +166,11 @@ describe("StrictMode", () => {
     expect(readsOf(unrecorded)).toBe(1);
     expect(readsOf(recorded)).toBe(0);
 
-    // One loop: one read per 1500 ms period, not two.
-    await act(() => vi.advanceTimersByTimeAsync(1_500));
-    expect(readsOf(recorded)).toBe(1);
-    await act(() => vi.advanceTimersByTimeAsync(1_600));
-    expect(readsOf(recorded)).toBe(2);
+    // No automatic polling, even with StrictMode's double effect run.
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(readsOf(recorded)).toBe(0);
 
-    // "not-recorded" is not followed; nothing is ever published again.
+    // Nothing is ever published again.
     expect(readsOf(unrecorded)).toBe(1);
     expect(listOperations).toHaveBeenCalledTimes(1);
     expect(publish).not.toHaveBeenCalled();

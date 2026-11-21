@@ -8,7 +8,7 @@ import {
 } from "../src/mocks";
 import { createJournal } from "../src/persistence/journal";
 import { createPublicationStore, selectAttempts, selectView } from "../src/store";
-import { browserTimers } from "../src/store/scheduler";
+import { browserTimers } from "../src/store/timers";
 import { inertTimers } from "../src/test/inertTimers";
 
 const ANN = "ann-101";

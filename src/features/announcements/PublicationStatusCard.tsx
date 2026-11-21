@@ -47,7 +47,7 @@ function contentFor(view: AnnouncementView): StatusContent {
       return {
         title: "Processing",
         description:
-          "The service accepted this announcement and is publishing it. We'll keep checking automatically.",
+          "The service accepted this announcement and is publishing it. Use “Check status” to see if it has finished.",
         ...(view.stale && { details: <StaleWarning op={view.op} /> }),
       };
     case "published":
@@ -91,24 +91,13 @@ function contentFor(view: AnnouncementView): StatusContent {
   }
 }
 
-/** The last status read failed while processing. Not a live region: its countdown ticks. */
+/** The last status read failed while processing. */
 function StaleWarning({ op }: { op: OperationEntry }) {
-  let retry: ReactNode = null;
-  if (op.nextCheckAt !== undefined) {
-    retry = (
-      <>
-        {" "}
-        Retrying <RelativeTime value={op.nextCheckAt} direction="future" updateEveryMs={1_000} />.
-      </>
-    );
-  } else if (op.checkInFlight) {
-    retry = " Retrying now…";
-  }
-
   return (
     <Banner tone="warning" live={false}>
       Couldn&apos;t refresh status. Showing the last known status — this doesn&apos;t mean
-      publication failed.{retry}
+      publication failed.
+      {op.checkInFlight ? " Checking again…" : " Use “Check status” to try again."}
     </Banner>
   );
 }

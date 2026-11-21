@@ -34,7 +34,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       await app.open();
 
       await app.publish();
-      await expect(app.cardTitle("Published")).toBeVisible();
+      await app.checkUntil("Published");
       // Expand the attempt history so its rows are checked.
       await app.attempts(1).click();
 

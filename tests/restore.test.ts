@@ -3,7 +3,7 @@ import type { OperationEntry } from "../src/domain";
 import { createAnnouncementMock, type AnnouncementScenario } from "../src/mocks";
 import { createJournal } from "../src/persistence/journal";
 import { createPublicationStore, selectView } from "../src/store";
-import { browserTimers } from "../src/store/scheduler";
+import { browserTimers } from "../src/store/timers";
 import { inertTimers } from "../src/test/inertTimers";
 
 const ANN = "ann-101";
@@ -74,7 +74,7 @@ beforeEach(() => {
 });
 
 describe("restore after a refresh, with the supplied mock", () => {
-  it("success: checking, then processing, then published by polling; never publishes", async () => {
+  it("success: checking, then processing, then published by a check; never publishes", async () => {
     const id = beforeRefresh("success");
     await advance(200);
 
@@ -87,11 +87,12 @@ describe("restore after a refresh, with the supplied mock", () => {
     expect(store.getState().restoreStatus).toBe("ready");
     expect(view()).toMatchObject({ kind: "processing", op: { operationId: id } });
 
-    // Polling reads 1500 ms after each reply: at 1.8 s (processing, reply 1.9 s) and at 3.4 s
-    // (done at 2.5 s, reply 3.5 s).
-    await advance(3_199);
+    // No automatic polling: still processing long after completion (2.5 s) until a check.
+    await advance(5_000);
     expect(view().kind).toBe("processing");
-    await advance(1);
+    const check = store.getState().check(id);
+    await advance(100);
+    await check;
     expect(view()).toMatchObject({ kind: "published", op: { operationId: id } });
     expect(journalIds()).toEqual([]);
     expect(publishSpy).not.toHaveBeenCalled();
@@ -120,11 +121,11 @@ describe("restore after a refresh, with the supplied mock", () => {
     expect(publishSpy).not.toHaveBeenCalled();
   });
 
-  it("lost-response: store B follows store A's operation to published without publishing", async () => {
+  it("lost-response: store B checks store A's operation to published without publishing", async () => {
     const id = beforeRefresh("lost-response");
     await advance(50); // store A is dropped before its (lost) publish reply at 120 ms
 
-    const { store, view, entry, publishSpy } = afterRefresh();
+    const { store, view, publishSpy, statusSpy } = afterRefresh();
     const done = store.getState().restore();
     expect(view()).toMatchObject({ kind: "checking", op: { operationId: id } });
 
@@ -132,12 +133,13 @@ describe("restore after a refresh, with the supplied mock", () => {
     await done;
     expect(store.getState().restoreStatus).toBe("ready");
     expect(view()).toMatchObject({ kind: "processing", op: { operationId: id } });
-    expect(entry(id).nextCheckAt).toBe(Date.now() + 1_500);
 
-    // Polls 1500 ms after each reply: at 1.65 s (processing) and 3.25 s (done at 3 s).
-    await advance(3_199);
-    expect(view().kind).toBe("processing");
-    await advance(1);
+    // Done at 3 s; nothing is read until the user checks.
+    await advance(4_000);
+    expect(statusSpy).not.toHaveBeenCalled();
+    const check = store.getState().check(id);
+    await advance(100);
+    await check;
     expect(view()).toMatchObject({ kind: "published", op: { operationId: id } });
     expect(publishSpy).not.toHaveBeenCalled();
   });
@@ -185,7 +187,7 @@ describe("restore after a refresh, with the supplied mock", () => {
     expect(publishSpy).not.toHaveBeenCalled();
   });
 
-  it("a never-recorded journal entry: checking, then unconfirmed; polling stops; resend resumes it", async () => {
+  it("a never-recorded journal entry: checking, then unconfirmed; resend with the same id", async () => {
     createJournal(sessionStorage).add({
       operationId: "op-ghost",
       announcementId: ANN,
@@ -201,22 +203,24 @@ describe("restore after a refresh, with the supplied mock", () => {
     await done;
 
     expect(view()).toMatchObject({ kind: "unconfirmed", notRecorded: true });
-    expect(entry("op-ghost").nextCheckAt).toBeUndefined();
+    expect(entry("op-ghost").lastError?.kind).toBe("not-recorded");
     await advance(60_000);
     expect(statusSpy).toHaveBeenCalledTimes(1);
     expect(publishSpy).not.toHaveBeenCalled();
 
-    // Resend with the SAME id; following resumes.
+    // Resend with the SAME id.
     expect(store.getState().retrySameAttempt("op-ghost")).toBe(true);
     expect(publishSpy).toHaveBeenCalledExactlyOnceWith(ANN, "op-ghost");
-    expect(entry("op-ghost").nextCheckAt).toBe(Date.now() + 1_500);
 
     await advance(120);
     expect(view()).toMatchObject({ kind: "processing", op: { operationId: "op-ghost" } });
-    // Polls at 1.5 s (processing) and 3.1 s after the resend; done at 2.5 s.
-    await advance(3_200 - 120);
+    // Done 2.5 s after the resend; a check then sees it.
+    await advance(2_500);
+    const check = store.getState().check("op-ghost");
+    await advance(100);
+    await check;
     expect(view()).toMatchObject({ kind: "published", op: { operationId: "op-ghost" } });
-    expect(statusSpy).toHaveBeenCalledTimes(3);
+    expect(statusSpy).toHaveBeenCalledTimes(2);
     expect(publishSpy).toHaveBeenCalledTimes(1);
   });
 

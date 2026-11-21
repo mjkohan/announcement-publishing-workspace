@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { AppPage } from "./helpers";
 
-test("a publish interrupted by a reload is followed to Published, without a second attempt", async ({
+test("a publish interrupted by a reload is checked to Published, without a second attempt", async ({
   page,
 }) => {
   const app = new AppPage(page);
@@ -13,7 +13,7 @@ test("a publish interrupted by a reload is followed to Published, without a seco
   await page.reload();
   await app.waitUntilReady();
 
-  await expect(app.cardTitle("Published")).toBeVisible();
+  await app.checkUntil("Published");
   await expect(app.listItem("ann-101")).toContainText("Published");
   // One attempt only: the reload resumed the same operationId instead of publishing again.
   await expect(app.main.getByText(/^Attempts \(\d+\)$/)).toHaveText("Attempts (1)");

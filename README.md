@@ -48,27 +48,25 @@ CI (`.github/workflows/ci.yml`) runs `check` and `build`, then Playwright on Chr
 
 Open **Simulation controls** at the bottom of the page, pick a scenario, then press **Publish**. The scenario applies to new operations only. **Reset simulation** clears all service records and attempts.
 
-| Scenario               | Steps                      | Expected result                                                                                                        | After a refresh                                                                             |
-| ---------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `success`              | Publish                    | Sending… → Processing → Published (about 2.5 s), with the publication ID                                               | Same attempt is read again ("Checking status…") and ends Published. No new publish          |
-| `explicit-rejection`   | Publish                    | Rejected, with the service reason. **Start new attempt…** asks for confirmation, then sends a new operationId          | Rejected stays, with the reason; a new attempt is still possible                            |
-| `lost-response`        | Publish                    | Outcome unknown (reply lost), then polling finds Processing → Published. **Retry same attempt** reuses the operationId | Attempt is followed to Published; "Attempts (1)"                                            |
-| `status-check-failure` | Publish                    | Outcome unknown; the first status read fails, polling backs off and retries, then Published                            | The restore list read may fail once and is retried (500 ms); then Published                 |
-| `overlapping`          | Publish all three, quickly | Each announcement has its own timing (2 s, 6 s, 10 s); replies arrive out of order; each ends Published on its own     | All three are followed independently; one attempt each                                      |
-| `slow-response`        | Publish                    | Polling shows Published before the late publish reply (4.5 s); the late "processing" reply does not undo it            | Refresh during "Sending…": the same attempt is followed to Published, never published again |
+| Scenario               | Steps                                       | Expected result                                                                                                                 | After a refresh                                                                                         |
+| ---------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `success`              | Publish, then **Check status**              | Sending… → Processing; after about 2.5 s, **Check status** shows Published, with the publication ID                             | Same attempt is read again ("Checking status…"); **Check status** then shows Published. No new publish  |
+| `explicit-rejection`   | Publish                                     | Rejected, with the service reason. **Start new attempt…** asks for confirmation, then sends a new operationId                   | Rejected stays, with the reason; a new attempt is still possible                                        |
+| `lost-response`        | Publish, then **Check status**              | Outcome unknown (reply lost); **Check status** finds Processing, later Published. **Retry same attempt** reuses the operationId | Same attempt, checked to Published; "Attempts (1)"                                                      |
+| `status-check-failure` | Publish, then **Check status** twice        | Outcome unknown; the first check fails (never "rejected"), the next one recovers, then Published                                | The restore list read may fail once and is retried (500 ms); then Published after a check               |
+| `overlapping`          | Publish all three, quickly, then check each | Each announcement has its own timing (2 s, 6 s, 10 s); replies arrive out of order; each ends Published on its own              | All three are restored independently; one attempt each                                                  |
+| `slow-response`        | Publish, then **Check status**              | Sending… for 4.5 s, then the late "processing" reply; **Check status** shows Published, and the old reply never undoes it       | Refresh during "Sending…": the same attempt is restored and checked to Published, never published again |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
   UI["UI components<br/>features/announcements, ui"] -- "selectors / actions" --> Store["Zustand store<br/>store/publicationStore"]
-  Store -- "ensure / stop" --> Scheduler["Scheduler<br/>per-operation timers"]
-  Scheduler -- "read(operationId)" --> Store
   Store -- "write-ahead / restore" --> Journal["Journal<br/>sessionStorage (app key)"]
   Store -- "publish / getStatus / listOperations / getAnnouncements" --> Service["Mock service<br/>src/mocks"]
 ```
 
-The scheduler owns timers only: when one fires, it asks the store to read, and the store makes the (deduplicated) `getStatus` call.
+There is no automatic polling: a status read happens only when the user presses **Check status** (and once per unknown journal entry during the restore after a refresh).
 
 Components never call the service and own no timers. All side effects live in the store; the only component timer is the presentational tick in `RelativeTime`.
 
@@ -77,7 +75,7 @@ src/
   app/                    App shell, ServiceProvider (creates the store), hooks, ErrorBoundary
   domain/                 Pure types and logic: derive.ts (views), merge.ts (snapshots), operationId.ts, errors.ts
   persistence/journal.ts  Write-ahead journal in sessionStorage (own key)
-  store/                  publicationStore.ts, scheduler.ts, selectors.ts
+  store/                  publicationStore.ts, selectors.ts, timers.ts (restore retry waits)
   features/announcements/ List, detail, status card, actions, attempt history, restore banner
   ui/                     Shared presentational components (Button, Banner, ConfirmDialog, ...)
   dev/                    Simulation controls (scenario switcher, reset)
@@ -100,7 +98,7 @@ e2e/                      Playwright specs, including axe accessibility checks
 - **Zustand vanilla store (`createStore` + `useStore`).** Service calls and timers live outside React, so StrictMode double effects cannot duplicate requests, and the store is testable without rendering.
 - **Keyed by `operationId`.** The service reports per operation and replies arrive out of order; one record per operation keeps them independent.
 - **Version-based merge.** Late or out-of-order snapshots (e.g. a slow publish reply) can never move an operation backwards.
-- **Per-operation polling with backoff, plus manual check.** One `setTimeout` loop per unresolved operation: every 1.5 s, after failures 1 s, 2 s, 4 s, 8 s, then 10 s. Paused while the tab is hidden; reads at once when it is visible again. **Check status** joins the read already in flight instead of sending a second one.
+- **Manual status checks, no automatic polling.** The brief accepts user-initiated checks. **Check status** sends one `getStatus`; a second click while it is pending joins the same request. Fewer moving parts (no timers, no backoff), at the cost of one click to see a finished publication.
 - **Write-ahead journal.** The attempt is written to sessionStorage before `service.publish` is called, so a refresh at any moment can find it and recover by reading, never by publishing. If the write fails, the publish is not sent.
 - **`erasableSyntaxOnly` off in `tsconfig.app.json`.** `src/mocks/service.ts` uses constructor parameter properties, and the supplied mocks must stay unchanged.
 - **Supplied mocks untouched.** `src/mocks` is excluded from ESLint and Prettier and marked `-text` in `.gitattributes`; the app uses only the public API from `src/mocks/index.ts`.
@@ -113,13 +111,13 @@ e2e/                      Playwright specs, including axe accessibility checks
 - One published attempt means the announcement is published.
 - A new attempt is allowed only after a confirmed rejection, and only after the user confirms it.
 - Publishing is paused until the restore after a refresh finishes (or is retried after it fails).
-- Polling and backoff intervals are product choices, not service requirements.
+- Status is read only on **Check status** (and during the restore); nothing is read in the background.
 - An unknown publish error means "outcome unknown", never "failed". A failed status read never means "rejected".
 
 ## Known limitations and next steps
 
 - **Cross-tab:** two tabs can each start an attempt. Next: coordinate through `BroadcastChannel` (or a shared journal in `localStorage`).
-- **Push updates:** status comes from polling. Next: SSE or WebSocket from the service, with polling as a fallback.
+- **Live updates:** a finished publication shows only after **Check status**. Next: polling with backoff, or SSE/WebSocket from the service.
 - **Offline:** no offline detection. With a real network service, requests would just fail and back off. Next: pause on `navigator.onLine === false` and resume on `online`.
 - **i18n:** UI text is English only and inline. Next: extract strings and format dates per locale.
 

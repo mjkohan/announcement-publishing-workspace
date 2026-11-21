@@ -9,12 +9,12 @@ import {
 } from "../src/mocks";
 import { createJournal } from "../src/persistence/journal";
 import { createPublicationStore, selectView } from "../src/store";
-import { browserTimers } from "../src/store/scheduler";
+import { browserTimers } from "../src/store/timers";
 
 /**
- * Every scenario end to end: the supplied mock, fake timers and the polling scheduler on.
- * Mock timing: status reads reply after 100 ms; the store polls 1500 ms after each reply and
- * backs off 1 s after the first failed read.
+ * Every scenario end to end: the supplied mock and fake timers. There is no automatic polling:
+ * the tests read the status with `check()`, as the "Check status" button does. Status reads
+ * reply after 100 ms.
  */
 
 const ANN = "ann-101";
@@ -110,70 +110,64 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 
-describe("scenarios with polling", () => {
-  it("status-check-failure: a failed read is never rejected; polling recovers to published", async () => {
-    const { publish, view, entry, elapsed } = setup(mockFor("status-check-failure"));
+/** "Check status" for one operation, then lets its 100 ms reply arrive. */
+async function checkNow(store: ReturnType<typeof setup>["store"], operationId: string) {
+  const done = store.getState().check(operationId);
+  await advance(100);
+  await done;
+}
+
+describe("scenarios with manual status checks", () => {
+  it("status-check-failure: a failed read is never rejected; the next check recovers", async () => {
+    const { store, publish, view, entry, statusSpy } = setup(mockFor("status-check-failure"));
     const id = publish();
 
     await advance(120); // the publish response is lost
     expect(view()).toMatchObject({ kind: "unconfirmed", notRecorded: false });
     expect(entry(id).lastError?.kind).toBe("response-lost");
 
-    // First poll at 1.5 s consumes the pending STATUS_UNAVAILABLE and fails at 1.6 s.
-    await advance(1_600 - 120);
+    // The first check consumes the pending STATUS_UNAVAILABLE.
+    await checkNow(store, id);
     expect(view().kind).not.toBe("rejected");
     expect(view()).toMatchObject({ kind: "unconfirmed", notRecorded: false });
     expect(entry(id).lastError?.kind).toBe("status-unavailable");
-    expect(entry(id).nextCheckAt).toBe(Date.now() + 1_000);
 
-    // Backoff 1 s: read at 2.6 s, processing at 2.7 s.
-    await advance(1_100);
-    expect(elapsed()).toBe(2_700);
-    expect(view()).toMatchObject({ kind: "processing", stale: false });
-    expect(entry(id).lastError).toBeUndefined();
+    // Nothing is read again on its own.
+    await advance(30_000);
+    expect(statusSpy).toHaveBeenCalledTimes(1);
 
-    // Next poll at 4.2 s; the operation completed at 3 s, so published at 4.3 s.
-    await advance(1_599);
-    expect(view().kind).toBe("processing");
-    await advance(1);
+    // The operation completed at 3 s; the next check sees it.
+    await checkNow(store, id);
     expect(view()).toMatchObject({ kind: "published", op: { operationId: id } });
+    expect(entry(id).lastError).toBeUndefined();
   });
 
   it("overlapping: published in the order 102, 103, 101, each on its own announcement", async () => {
-    const { publish, view, elapsed } = setup(mockFor("overlapping"));
+    const { store, publish, view, statusSpy } = setup(mockFor("overlapping"));
     const ids: Record<string, string> = {
       "ann-101": publish("ann-101"), // done at 10 s
       "ann-102": publish("ann-102"), // done at 2 s
       "ann-103": publish("ann-103"), // done at 6 s
     };
-
-    const publishedAt: Record<string, number> = {};
-    const order: string[] = [];
-    while (elapsed() < 13_000) {
-      await advance(100);
-      for (const announcementId of Object.keys(ids)) {
-        if (
-          publishedAt[announcementId] === undefined &&
-          view(announcementId).kind === "published"
-        ) {
-          publishedAt[announcementId] = elapsed();
-          order.push(announcementId);
-        }
-      }
-    }
-
-    expect(order).toEqual(["ann-102", "ann-103", "ann-101"]);
-    const completion: Record<string, number> = {
-      "ann-101": 10_000,
-      "ann-102": 2_000,
-      "ann-103": 6_000,
+    const kinds = () => Object.keys(ids).map((announcementId) => view(announcementId).kind);
+    const checkAll = async () => {
+      for (const operationId of Object.values(ids)) await checkNow(store, operationId);
     };
+
+    await advance(2_500);
+    expect(statusSpy).not.toHaveBeenCalled();
+    await checkAll();
+    expect(kinds()).toEqual(["processing", "published", "processing"]);
+
+    await advance(4_000);
+    await checkAll();
+    expect(kinds()).toEqual(["processing", "published", "published"]);
+
+    await advance(4_000);
+    await checkAll();
+    expect(kinds()).toEqual(["published", "published", "published"]);
+
     for (const [announcementId, operationId] of Object.entries(ids)) {
-      // Seen by the first poll after completion: at most one poll period plus a reply later.
-      expect(publishedAt[announcementId]).toBeGreaterThanOrEqual(completion[announcementId] ?? 0);
-      expect(publishedAt[announcementId]).toBeLessThanOrEqual(
-        (completion[announcementId] ?? 0) + 1_600,
-      );
       expect(view(announcementId)).toMatchObject({
         kind: "published",
         op: {
@@ -185,21 +179,21 @@ describe("scenarios with polling", () => {
     }
   });
 
-  it("slow-response: polling shows published at ~1.5 s; the stale v1 reply at 4.5 s is ignored", async () => {
-    const { publish, view, entry, publishSpy, statusSpy } = setup(mockFor("slow-response"));
+  it("slow-response: a check shows published before the reply; the stale v1 reply is ignored", async () => {
+    const { store, publish, view, entry, publishSpy, statusSpy } = setup(mockFor("slow-response"));
     const id = publish();
 
-    await advance(1_499);
+    // Done at 1.5 s, but nothing is read on its own: still "Sending…".
+    await advance(1_600);
     expect(view().kind).toBe("submitting");
+    expect(statusSpy).not.toHaveBeenCalled();
 
-    // First read at 1.5 s (the operation is complete by then), reply after 100 ms.
-    await advance(1 + 100);
+    await checkNow(store, id);
     expect(view()).toMatchObject({ kind: "published", op: { operationId: id } });
     expect(entry(id)).toMatchObject({ publishInFlight: true, snapshot: { version: 2 } });
-    expect(entry(id).nextCheckAt).toBeUndefined();
 
     // The publish reply (v1, captured when the request was sent) arrives at 4.5 s.
-    await advance(4_500 - 1_600);
+    await advance(4_500 - 1_700);
     expect(entry(id)).toMatchObject({
       publishInFlight: false,
       snapshot: { status: "published", version: 2 },
@@ -218,7 +212,8 @@ describe("out-of-order replies", () => {
     const { store, publish, view, entry } = setup(service);
     const id = publish();
 
-    await advance(1_500); // reply lost at 120 ms; the first poll at 1.5 s is now held
+    await advance(120); // reply lost
+    void store.getState().check(id); // this read is held
     expect(read(0).operationId).toBe(id);
     expect(entry(id)).toMatchObject({ checkInFlight: true, publishInFlight: false });
 
@@ -244,10 +239,12 @@ describe("out-of-order replies", () => {
 
   it("a read that overlaps an in-flight publish leaves publishInFlight untouched", async () => {
     const { service, read } = heldStatusService("slow-response");
-    const { publish, view, entry } = setup(service);
+    const { store, publish, view, entry } = setup(service);
     const id = publish(); // reply due at 4.5 s
 
-    await advance(1_600); // poll at 1.5 s, real reply ready at 1.6 s, held
+    await advance(1_500);
+    void store.getState().check(id);
+    await advance(100); // real reply ready, held
     expect(entry(id)).toMatchObject({ publishInFlight: true, checkInFlight: true });
 
     read(0).reply.resolve(await read(0).real);

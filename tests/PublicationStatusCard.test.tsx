@@ -76,7 +76,7 @@ describe("PublicationStatusCard", () => {
       "processing",
       { ...entry(), snapshot: processing() },
       "Processing",
-      "The service accepted this announcement and is publishing it. We'll keep checking automatically.",
+      "The service accepted this announcement and is publishing it. Use “Check status” to see if it has finished.",
     ],
     [
       "unconfirmed",
@@ -129,37 +129,21 @@ describe("PublicationStatusCard", () => {
       snapshot: processing(),
     });
 
-    it("warns, says it is not a failure, and counts down to the next read", () => {
-      const { card } = renderCard(stale({ nextCheckAt: NOW + 4_000 }));
+    it("warns, says it is not a failure, and points to Check status", () => {
+      const { card } = renderCard(stale({}));
 
       expectTitle(card, "Processing");
-
-      const warning = within(card).getByText(/Couldn't refresh status\. Showing/);
-      expect(warning).toHaveTextContent(
-        "Couldn't refresh status. Showing the last known status — this doesn't mean publication failed. Retrying in 4s.",
+      expect(within(card).getByText(/Couldn't refresh status\. Showing/)).toHaveTextContent(
+        "Couldn't refresh status. Showing the last known status — this doesn't mean publication failed. Use “Check status” to try again.",
       );
-      // The countdown ticks, so the warning is not a live region.
       expect(within(card).queryByRole("alert")).not.toBeInTheDocument();
-
-      act(() => {
-        vi.advanceTimersByTime(1_000);
-      });
-      expect(warning).toHaveTextContent("Retrying in 3s.");
     });
 
-    it("says retrying now while the read is in flight", () => {
+    it("says checking again while the read is in flight", () => {
       const { card } = renderCard(stale({ checkInFlight: true }));
 
       expect(within(card).getByText(/Couldn't refresh status\. Showing/)).toHaveTextContent(
-        "Retrying now…",
-      );
-    });
-
-    it("leaves out the retry when no read is planned", () => {
-      const { card } = renderCard(stale({}));
-
-      expect(within(card).getByText(/Couldn't refresh status\. Showing/)).not.toHaveTextContent(
-        "Retrying",
+        "Checking again…",
       );
     });
   });

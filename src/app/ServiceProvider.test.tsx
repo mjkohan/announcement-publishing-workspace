@@ -159,7 +159,7 @@ describe("ServiceProvider", () => {
     expect(listOperations).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps polling after the StrictMode remount and stops every timer on unmount", async () => {
+  it("starts no timer after the StrictMode remount: there is no automatic polling", async () => {
     vi.useFakeTimers();
     const processing: PublicationOperation = {
       operationId: "op-1",
@@ -170,17 +170,14 @@ describe("ServiceProvider", () => {
     };
     const listOperations = vi.fn(() => Promise.resolve([processing]));
     const service: IAnnouncementService = { ...pendingService(), listOperations };
-    const { result, unmount } = renderHook(
-      () => usePublicationStore((state) => state.operations["op-1"]?.nextCheckAt),
+    const { result } = renderHook(
+      () => usePublicationStore((state) => state.operations["op-1"]?.snapshot?.status),
       { wrapper: wrapperFor(service) },
     );
 
     await act(() => vi.advanceTimersByTimeAsync(0));
     expect(listOperations).toHaveBeenCalledTimes(1);
-    expect(result.current).toBe(Date.now() + 1_500);
-    expect(vi.getTimerCount()).toBe(1);
-
-    unmount();
+    expect(result.current).toBe("processing");
     expect(vi.getTimerCount()).toBe(0);
   });
 

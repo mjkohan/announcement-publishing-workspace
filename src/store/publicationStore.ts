@@ -14,23 +14,14 @@ import type {
   PublicationOperation,
 } from "../mocks";
 import type { Journal } from "../persistence/journal";
-import {
-  browserTimers,
-  createScheduler,
-  documentVisibility,
-  type ReadOutcome,
-  type Timers,
-  type VisibilitySource,
-} from "./scheduler";
+import { browserTimers, type Timers } from "./timers";
 
 export interface PublicationStoreDeps {
   service: IAnnouncementService;
   journal: Journal;
   now: () => number;
-  /** Timers for status polling. Defaults to the global `setTimeout`/`clearTimeout`. */
+  /** Timers for the restore retry waits. Defaults to the global `setTimeout`/`clearTimeout`. */
   timers?: Timers;
-  /** Pauses polling while hidden. Defaults to `document` visibility. */
-  visibility?: VisibilitySource;
 }
 
 export interface PublicationState {
@@ -70,16 +61,10 @@ export interface PublicationActions {
    */
   resetSimulation: () => Promise<void>;
   /**
-   * The UI is mounted: loads the announcements (only while their status is "idle"), runs
-   * `restore()` (once) and, if restore is done, follows every unresolved operation again.
-   * Pair with `disconnect()`. Safe under StrictMode's effect re-run.
+   * The UI is mounted: loads the announcements (only while their status is "idle") and runs
+   * `restore()` (once). Safe under StrictMode's effect re-run.
    */
   connect: () => void;
-  /**
-   * The UI unmounted: stops all polling timers and following. Work in flight settles normally
-   * but follows nothing new until `connect()`.
-   */
-  disconnect: () => void;
   /**
    * Starts the first attempt. Only from "idle" and once restore is "ready". Returns the new
    * operationId, if any.
@@ -117,26 +102,10 @@ const keep: EntryUpdate = (entry) => entry;
 /** Waits before each `listOperations` retry during restore (5 tries in total). */
 export const RESTORE_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000, 4_000];
 
-/** One status read in flight. `done` is what `check()` returns; `outcome` feeds the scheduler. */
-interface InFlightCheck {
-  done: Promise<void>;
-  outcome: Promise<ReadOutcome>;
-}
-
-const SKIPPED_CHECK: InFlightCheck = {
-  done: Promise.resolve(),
-  outcome: Promise.resolve("stop"),
-};
+/** No status read needed: the operation is unknown or terminal. */
+const SKIPPED_CHECK: Promise<void> = Promise.resolve();
 
 const isTerminal = (entry: OperationEntry | undefined): boolean => entry?.snapshot?.version === 2;
-
-function withNextCheckAt(entry: OperationEntry, at: number | undefined): OperationEntry {
-  if (entry.nextCheckAt === at) return entry;
-  if (at !== undefined) return { ...entry, nextCheckAt: at };
-  const next = { ...entry };
-  delete next.nextCheckAt;
-  return next;
-}
 
 function withoutError(entry: OperationEntry): OperationEntry {
   if (!entry.lastError) return entry;
@@ -150,11 +119,11 @@ export function createPublicationStore({
   journal,
   now,
   timers = browserTimers,
-  visibility = documentVisibility(),
 }: PublicationStoreDeps): PublicationStoreApi {
   const store = createStore<PublicationStore>()((set, get) => {
     let nextSeq = 0;
-    const inFlightChecks = new Map<string, InFlightCheck>();
+    /** Status reads in flight, by operationId. A second "Check status" joins the first one. */
+    const inFlightChecks = new Map<string, Promise<void>>();
 
     const isStale = (epoch: number) => get().epoch !== epoch;
 
@@ -246,7 +215,7 @@ export function createPublicationStore({
      * One `getStatus` request. Never called while another read for the same operation is in
      * flight (see `startCheck`). Touches only `checkInFlight`, never `publishInFlight`.
      */
-    async function readStatus(operationId: string, entry: OperationEntry): Promise<ReadOutcome> {
+    async function readStatus(operationId: string, entry: OperationEntry): Promise<void> {
       const epoch = get().epoch;
       const seq = entry.checkSeq + 1;
       patch(operationId, (current) => ({ ...current, checkInFlight: true, checkSeq: seq }));
@@ -264,14 +233,13 @@ export function createPublicationStore({
       // A read from an older epoch was already dropped from the map by the reset; never remove
       // a newer in-flight read for the same id.
       if (!isStale(epoch)) inFlightChecks.delete(operationId);
-      if (isStale(epoch)) return "stop";
+      if (isStale(epoch)) return;
 
       // Every update below runs on the entry read fresh from state, not on `entry`.
       const current = get().operations[operationId];
-      if (!current) return "stop";
+      if (!current) return;
       const at = now();
       let next: OperationEntry;
-      let outcome: ReadOutcome = "ok";
       if (result.kind === "snapshot") {
         next = { ...withoutError(mergeSnapshot(current, result.snapshot)), lastCheckedAt: at };
       } else if (result.kind === "missing") {
@@ -281,78 +249,40 @@ export function createPublicationStore({
           next = current;
         } else if (current.snapshot) {
           // The service had reported this operation before (records cleared elsewhere?). Keep
-          // the snapshot, show it as stale, and keep following with backoff.
+          // the snapshot and show it as stale.
           next = { ...current, lastError: { kind: "not-recorded", at }, lastCheckedAt: at };
-          outcome = "failed";
         } else {
+          // Not received by the service: `retrySameAttempt` may resend the same operationId.
           next = { ...current, lastError: { kind: "not-recorded", at }, lastCheckedAt: at };
-          // Asking again changes nothing. `retrySameAttempt` follows the operation again.
-          outcome = "stop";
         }
       } else {
         // A failed status read never means "rejected"; it only marks the data as stale.
         const lastError = { kind: toPublicationError(result.error), at };
         next = current.checkSeq === seq ? { ...current, lastError } : current;
-        outcome = "failed";
       }
       patch(operationId, () => ({ ...next, checkInFlight: false }));
-      if (!isTerminal(next)) return outcome;
       settleTerminal(operationId);
-      return "stop";
     }
 
     /** Starts a status read, or joins the one already in flight for this operation. */
-    function startCheck(operationId: string): InFlightCheck {
+    function startCheck(operationId: string): Promise<void> {
       const existing = inFlightChecks.get(operationId);
       if (existing) return existing;
       const entry = get().operations[operationId];
       if (!entry || isTerminal(entry)) return SKIPPED_CHECK;
 
-      const outcome = readStatus(operationId, entry);
-      const check: InFlightCheck = { outcome, done: outcome.then(() => undefined) };
+      const check = readStatus(operationId, entry);
       inFlightChecks.set(operationId, check);
       return check;
     }
 
-    // `resetSimulation` calls `scheduler.stopAll()` before following again, so that reads from
-    // the old epoch (which return "stop") cannot end the new following.
-    const scheduler = createScheduler({
-      read: (operationId) => startCheck(operationId).outcome,
-      onSchedule: (operationId, at) => {
-        patch(operationId, (current) => withNextCheckAt(current, at));
-      },
-      now,
-      timers,
-      visibility,
-    });
-
-    /** `false` after `disconnect()` (the provider unmounted): nothing new is followed. */
-    let connected = true;
-
-    /** Follows an unresolved operation. A restored entry ("checking") is read at once. */
-    function follow(operationId: string): void {
-      if (!connected) return;
-      const entry = get().operations[operationId];
-      if (!entry || isTerminal(entry)) return;
-      const restored = !entry.snapshot && !entry.lastError && !entry.publishInFlight;
-      scheduler.ensure(operationId, { immediate: restored });
-    }
-
     /**
-     * Once the service reports a terminal snapshot: stop following and drop the journal entry.
-     * Safe, because the service keeps the record and a later restore still lists it.
+     * Once the service reports a terminal snapshot: drop the journal entry. Safe, because the
+     * service keeps the record and a later restore still lists it.
      */
     function settleTerminal(operationId: string): void {
       if (!isTerminal(get().operations[operationId])) return;
-      scheduler.stop(operationId);
       journal.remove(operationId);
-    }
-
-    /** Follows every unresolved operation, except "not-recorded" ones (asking again changes nothing). */
-    function followUnresolved(): void {
-      for (const entry of Object.values(get().operations)) {
-        if (entry.lastError?.kind !== "not-recorded") follow(entry.operationId);
-      }
     }
 
     /** Restore retry waits, so a reset can cancel them instead of leaving timers behind. */
@@ -450,11 +380,10 @@ export function createPublicationStore({
         .read()
         .entries.map((entry) => entry.operationId)
         .filter((operationId) => !listed.has(operationId));
-      await Promise.all(missing.map((operationId) => startCheck(operationId).outcome));
+      await Promise.all(missing.map((operationId) => startCheck(operationId)));
       if (isStale(epoch)) return;
 
       set({ restoreStatus: "ready" });
-      followUnresolved();
     }
 
     let restoreRun: Promise<void> | undefined;
@@ -500,8 +429,6 @@ export function createPublicationStore({
         operations: { ...state.operations, [operationId]: entry },
         publishBlocked: null,
       }));
-      // Follow from the start: a status read can beat a slow publish response.
-      follow(operationId);
       void sendPublish(operationId);
       return operationId;
     }
@@ -548,14 +475,12 @@ export function createPublicationStore({
       retrySameAttempt(operationId) {
         const entry = get().operations[operationId];
         if (!entry || entry.snapshot || !entry.lastError || entry.publishInFlight) return false;
-        // Following may have stopped on "not-recorded"; the retry records the operation again.
-        follow(operationId);
         void sendPublish(operationId);
         return true;
       },
 
       check(operationId) {
-        return startCheck(operationId).done;
+        return startCheck(operationId);
       },
 
       restore() {
@@ -567,8 +492,6 @@ export function createPublicationStore({
       },
 
       resetSimulation() {
-        // Stop first: in-flight scheduler reads are dropped and no timer fires after the reset.
-        scheduler.stopAll();
         service.reset();
         // A failed clear is safe: a leftover entry restores as "not-recorded".
         journal.clear();
@@ -597,17 +520,9 @@ export function createPublicationStore({
       },
 
       connect() {
-        connected = true;
         // Only the first load: an "error" is retried by the user, a "ready" list stays.
         if (get().announcements.status === "idle") void get().loadAnnouncements();
         void startRestore("idle");
-        // Reconnected after a disconnect (StrictMode remount): resume following.
-        if (get().restoreStatus === "ready") followUnresolved();
-      },
-
-      disconnect() {
-        connected = false;
-        scheduler.stopAll();
       },
 
       applySnapshots(snapshots) {

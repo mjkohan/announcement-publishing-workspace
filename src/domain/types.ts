@@ -34,8 +34,6 @@ export interface OperationEntry {
   /** Last request failure. Kept separate so it never erases the snapshot. */
   lastError?: OperationError;
   lastCheckedAt?: number;
-  /** Local time (ms) of the next planned status read. Absent while reading, paused or not followed. */
-  nextCheckAt?: number;
 }
 
 export type PublicationStatus = PublicationOperation["status"];

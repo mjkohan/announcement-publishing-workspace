@@ -63,6 +63,18 @@ export class AppPage {
     await this.actions.getByRole("button", { name: "Publish" }).click();
   }
 
+  /**
+   * There is no automatic polling: presses "Check status" (when it is shown and enabled) until
+   * the card shows `title`.
+   */
+  async checkUntil(title: string, timeout = 20_000): Promise<void> {
+    await expect(async () => {
+      const button = this.actions.getByRole("button", { name: "Check status" });
+      if ((await button.isVisible()) && (await button.isEnabled())) await button.click();
+      await expect(this.cardTitle(title)).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout, intervals: [500, 1_000] });
+  }
+
   async pickScenario(scenario: AnnouncementScenario): Promise<void> {
     const select = this.page.getByRole("combobox", { name: "Scenario" });
     if (!(await select.isVisible())) {

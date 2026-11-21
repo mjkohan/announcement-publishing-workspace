@@ -10,7 +10,7 @@ import {
 import { createJournal, type Journal } from "../persistence/journal";
 import { inertTimers } from "../test/inertTimers";
 import { createPublicationStore, type PublicationStoreApi } from "./publicationStore";
-import { browserTimers } from "./scheduler";
+import { browserTimers } from "./timers";
 import { selectAttempts, selectView } from "./selectors";
 
 const ANN = "ann-101";
@@ -106,18 +106,18 @@ function loggingJournal(log: string[], base: Journal = createJournal(sessionStor
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 /**
- * Polling is off by default: most tests drive every status read by hand. With `polling: true`
- * the store uses the global (fake) timers and `Date.now()`; see "following".
+ * Inert timers and a manual clock by default. With `realTimers: true` the store uses the global
+ * (fake) timers and `Date.now()`, for the restore retry waits.
  */
-function setup(options: { journal?: Journal; polling?: boolean; unrestored?: boolean } = {}) {
+function setup(options: { journal?: Journal; realTimers?: boolean; unrestored?: boolean } = {}) {
   const log: string[] = [];
   const controlled = controlledService(log);
   let clock = 1_000;
   const store = createPublicationStore({
     service: controlled.service,
     journal: options.journal ?? loggingJournal(log),
-    now: options.polling ? () => Date.now() : () => clock,
-    timers: options.polling ? browserTimers : inertTimers,
+    now: options.realTimers ? () => Date.now() : () => clock,
+    timers: options.realTimers ? browserTimers : inertTimers,
   });
   // Restore is covered in "restore"; these tests start from a restored store.
   if (!options.unrestored) store.setState({ restoreStatus: "ready" });
@@ -616,7 +616,6 @@ describe("loadAnnouncements", () => {
     const loads = () => log.filter((call) => call === "getAnnouncements").length;
 
     store.getState().connect();
-    store.getState().disconnect();
     store.getState().connect();
     expect(loads()).toBe(1);
 
@@ -624,7 +623,6 @@ describe("loadAnnouncements", () => {
     await flush();
     expect(store.getState().announcements.status).toBe("ready");
 
-    store.getState().disconnect();
     store.getState().connect();
     expect(loads()).toBe(1);
   });
@@ -637,7 +635,6 @@ describe("loadAnnouncements", () => {
     await flush();
     expect(store.getState().announcements.status).toBe("error");
 
-    store.getState().disconnect();
     store.getState().connect();
     expect(log.filter((call) => call === "getAnnouncements")).toHaveLength(1);
   });
@@ -718,13 +715,13 @@ describe("selection", () => {
   });
 });
 
-describe("following (status polling)", () => {
+describe("status reads (no automatic polling)", () => {
   const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms);
 
-  function pollingSetup() {
+  function readsSetup() {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const ctx = setup({ polling: true });
+    const ctx = setup({ realTimers: true });
     const id = ctx.store.getState().publish(ANN) ?? "";
     const status = (index: number) => {
       const call = ctx.statuses[index];
@@ -734,133 +731,58 @@ describe("following (status polling)", () => {
     return { ...ctx, id, status };
   }
 
-  it("starts at publish(): first read after 1500 ms while the publish is in flight", async () => {
-    const { statuses, status, entry, id, view } = pollingSetup();
-    expect(entry(id).nextCheckAt).toBe(1_500);
+  it("publish() sends no status read and starts no timer", async () => {
+    const { publishes, statuses, id } = readsSetup();
+    expect(vi.getTimerCount()).toBe(0);
 
-    await advance(1_499);
+    lastPublish(publishes).reply.resolve(snapshot(id, "processing"));
+    await advance(60_000);
     expect(statuses).toHaveLength(0);
-    await advance(1);
-    expect(statuses).toHaveLength(1);
-    expect(entry(id)).toMatchObject({ publishInFlight: true, checkInFlight: true });
-    expect(entry(id).nextCheckAt).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
-    status(0).reply.resolve(snapshot(id, "processing"));
+  it("reads only when the user checks; a processing reply plans nothing more", async () => {
+    const { store, publishes, statuses, status, id, view } = readsSetup();
+    lastPublish(publishes).reply.resolve(snapshot(id, "processing"));
     await advance(0);
-    expect(entry(id).nextCheckAt).toBe(3_000);
+
+    const done = store.getState().check(id);
+    expect(statuses).toHaveLength(1);
+    status(0).reply.resolve(snapshot(id, "processing"));
+    await done;
     expect(view().kind).toBe("processing");
-  });
 
-  it("a manual check during a scheduled read returns the in-flight promise", async () => {
-    const { store, statuses, status, entry, id } = pollingSetup();
-    await advance(1_500);
-
-    const manual = store.getState().check(id);
-    expect(store.getState().check(id)).toBe(manual);
-    expect(statuses).toHaveLength(1);
-
-    status(0).reply.resolve(snapshot(id, "processing"));
-    await manual;
-    expect(entry(id)).toMatchObject({ checkInFlight: false, snapshot: { version: 1 } });
-  });
-
-  it("backs off after a failed read and resets after a successful one", async () => {
-    const { status, entry, id } = pollingSetup();
-    await advance(1_500);
-
-    status(0).reply.reject(new AnnouncementMockError("STATUS_UNAVAILABLE", "r", id));
-    await advance(0);
-    expect(entry(id).nextCheckAt).toBe(2_500);
-
-    await advance(1_000);
-    status(1).reply.resolve(snapshot(id, "processing"));
-    await advance(0);
-    expect(entry(id).nextCheckAt).toBe(4_000);
-  });
-
-  it("stops on not-recorded with no publish in flight; retrySameAttempt follows again", async () => {
-    const { store, publishes, statuses, status, entry, id } = pollingSetup();
-    lastPublish(publishes).reply.reject(new AnnouncementMockError("RESPONSE_LOST", "r", id));
-    await advance(1_500);
-
-    status(0).reply.resolve(null);
-    await advance(0);
-    expect(entry(id).lastError?.kind).toBe("not-recorded");
-    expect(entry(id).nextCheckAt).toBeUndefined();
     await advance(60_000);
     expect(statuses).toHaveLength(1);
-
-    expect(store.getState().retrySameAttempt(id)).toBe(true);
-    expect(entry(id).nextCheckAt).toBe(Date.now() + 1_500);
-    await advance(1_500);
-    expect(statuses).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("keeps following, with backoff, a known operation that suddenly reads as null", async () => {
-    const { publishes, statuses, status, entry, id, view } = pollingSetup();
+  it("a known operation that suddenly reads as null keeps its snapshot, shown as stale", async () => {
+    const { store, publishes, status, entry, id, view } = readsSetup();
     lastPublish(publishes).reply.resolve(snapshot(id, "processing"));
-    await advance(1_500);
-
-    status(0).reply.resolve(null);
     await advance(0);
+
+    const done = store.getState().check(id);
+    status(0).reply.resolve(null);
+    await done;
     expect(entry(id)).toMatchObject({
       snapshot: { status: "processing" },
       lastError: { kind: "not-recorded" },
-      nextCheckAt: Date.now() + 1_000,
     });
     expect(view()).toMatchObject({ kind: "processing", stale: true });
-
-    await advance(1_000);
-    expect(statuses).toHaveLength(2);
   });
 
-  it("disconnect stops every timer; connect resumes following", async () => {
-    const { store, statuses, entry, id } = pollingSetup();
-    expect(vi.getTimerCount()).toBe(1);
-
-    store.getState().disconnect();
-    expect(vi.getTimerCount()).toBe(0);
-    expect(entry(id).nextCheckAt).toBeUndefined();
-    await advance(60_000);
-    expect(statuses).toHaveLength(0);
-
-    store.getState().connect();
-    expect(entry(id).nextCheckAt).toBe(Date.now() + 1_500);
-    await advance(1_500);
-    expect(statuses).toHaveLength(1);
-  });
-
-  it("a publish reply that settles while disconnected starts no timer", async () => {
-    const { store, publishes, id, entry } = pollingSetup();
-    store.getState().disconnect();
-
-    lastPublish(publishes).reply.resolve(snapshot(id, "processing"));
-    await advance(0);
-    expect(entry(id).snapshot?.status).toBe("processing");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("stops when the publish reply is terminal: no status read is sent", async () => {
-    const { publishes, statuses, entry, id, view } = pollingSetup();
+  it("removes a terminal publish reply from the journal", async () => {
+    const { publishes, id, view, store } = readsSetup();
+    const journal = createJournal(sessionStorage);
+    expect(journal.read().entries.map((entry) => entry.operationId)).toEqual([id]);
 
     lastPublish(publishes).reply.resolve(snapshot(id, "rejected"));
     await advance(0);
     expect(view().kind).toBe("rejected");
-    expect(entry(id).nextCheckAt).toBeUndefined();
-
-    await advance(60_000);
-    expect(statuses).toHaveLength(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("stops when applySnapshots brings a terminal snapshot", async () => {
-    const { store, statuses, entry, id } = pollingSetup();
-
-    store.getState().applySnapshots([snapshot(id, "published")]);
-    expect(entry(id).nextCheckAt).toBeUndefined();
-
-    await advance(60_000);
-    expect(statuses).toHaveLength(0);
+    expect(journal.read().entries).toEqual([]);
+    // A terminal operation is never read again.
+    await store.getState().check(id);
   });
 });
 
@@ -873,7 +795,7 @@ describe("restore", () => {
     vi.setSystemTime(10_000);
     const journal = createJournal(sessionStorage);
     for (const entry of entries) journal.add({ ...entry, createdAt: 5_000 });
-    const ctx = setup({ polling: true, unrestored: true });
+    const ctx = setup({ realTimers: true, unrestored: true });
     const list = (index: number) => {
       const call = ctx.lists[index];
       if (!call) throw new Error(`No listOperations call #${String(index)}`);
@@ -955,7 +877,7 @@ describe("restore", () => {
   });
 
   it("becomes degraded after five failed lists; retryRestore recovers", async () => {
-    const { store, lists, list, statuses, status, view, entry, publishes } = restoreSetup([
+    const { store, lists, list, statuses, status, view, publishes } = restoreSetup([
       { operationId: "op-a", announcementId: ANN },
     ]);
     const done = store.getState().restore();
@@ -970,7 +892,6 @@ describe("restore", () => {
     expect(store.getState().publish(ANN)).toBeUndefined();
     await advance(60_000);
     expect(statuses).toHaveLength(0);
-    expect(entry("op-a").nextCheckAt).toBeUndefined();
 
     const retry = store.getState().retryRestore();
     expect(store.getState().restoreStatus).toBe("loading");
@@ -996,13 +917,12 @@ describe("restore", () => {
       announcementId: "ann-102",
       createdAt: Date.parse("2026-03-01T10:00:00.000Z"),
       snapshot: { status: "processing" },
-      nextCheckAt: 10_000 + 1_500,
     });
     expect(journalIds()).toEqual([]);
   });
 
   it("reads journal entries missing from the list; null means not-recorded", async () => {
-    const { store, list, statuses, status, view, entry, publishes } = restoreSetup([
+    const { store, list, statuses, status, view, publishes } = restoreSetup([
       { operationId: "op-a", announcementId: ANN },
     ]);
     const done = store.getState().restore();
@@ -1015,7 +935,6 @@ describe("restore", () => {
     status(0).reply.resolve(null);
     await done;
     expect(view()).toMatchObject({ kind: "unconfirmed", notRecorded: true });
-    expect(entry("op-a").nextCheckAt).toBeUndefined();
     await advance(60_000);
     expect(statuses).toHaveLength(1);
     expect(publishes).toHaveLength(0);
@@ -1025,8 +944,8 @@ describe("restore", () => {
     expect(publishes.map((call) => call.operationId)).toEqual(["op-a"]);
   });
 
-  it("removes terminal entries from the journal and follows unresolved ones", async () => {
-    const { store, list, entry, journalIds } = restoreSetup([
+  it("removes terminal entries from the journal and keeps unresolved ones", async () => {
+    const { store, list, entry, journalIds, statuses } = restoreSetup([
       { operationId: "op-a", announcementId: ANN },
       { operationId: "op-b", announcementId: "ann-102" },
     ]);
@@ -1036,8 +955,11 @@ describe("restore", () => {
     await done;
 
     expect(journalIds()).toEqual(["op-b"]);
-    expect(entry("op-a").nextCheckAt).toBeUndefined();
-    expect(entry("op-b").nextCheckAt).toBe(10_000 + 1_500);
+    expect(entry("op-a").snapshot?.status).toBe("published");
+    expect(entry("op-b").snapshot?.status).toBe("processing");
+    // No automatic polling: nothing is read after the restore.
+    await advance(60_000);
+    expect(statuses).toHaveLength(0);
   });
 
   it("drops the list result when the epoch changes while waiting for it", async () => {
@@ -1073,7 +995,7 @@ describe("resetSimulation", () => {
   function resetSetup() {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const ctx = setup({ polling: true });
+    const ctx = setup({ realTimers: true });
     const id = ctx.store.getState().publish(ANN) ?? "";
     const list = (index: number) => {
       const call = ctx.lists[index];
@@ -1171,17 +1093,6 @@ describe("resetSimulation", () => {
     await advance(10_000);
     expect(lists).toHaveLength(2);
     expect(store.getState().restoreStatus).toBe("ready");
-  });
-
-  it("stops following: no status read for the old operation after the reset", async () => {
-    const { store, statuses, list } = resetSetup();
-    const done = store.getState().resetSimulation();
-    list(0).resolve([]);
-    await done;
-
-    expect(vi.getTimerCount()).toBe(0);
-    await advance(60_000);
-    expect(statuses).toHaveLength(0);
   });
 });
 

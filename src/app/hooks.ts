@@ -32,7 +32,6 @@ const pickActions = (state: PublicationStore): PublicationActions => ({
   retryRestore: state.retryRestore,
   resetSimulation: state.resetSimulation,
   connect: state.connect,
-  disconnect: state.disconnect,
   publish: state.publish,
   startNewAttempt: state.startNewAttempt,
   retrySameAttempt: state.retrySameAttempt,

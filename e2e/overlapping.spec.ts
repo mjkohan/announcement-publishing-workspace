@@ -17,7 +17,10 @@ test("three overlapping publications each reach Published on the right announcem
     await expect(app.actions.getByRole("button", { name: "Publish" })).toBeHidden();
   }
 
+  // No automatic polling: check each one until it is published (ann-101 takes ~10 s).
   for (const id of IDS) {
+    await app.select(id);
+    await app.checkUntil("Published");
     await expect(app.listItem(id)).toContainText("Published");
   }
 

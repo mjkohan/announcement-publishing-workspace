@@ -52,7 +52,7 @@ const ROWS: Row[] = [
     kind: "processing",
     title: "Processing",
     copy: [
-      "The service accepted this announcement and is publishing it. We'll keep checking automatically.",
+      "The service accepted this announcement and is publishing it. Use “Check status” to see if it has finished.",
     ],
     actions: ["Check status"],
   },
@@ -62,7 +62,6 @@ const ROWS: Row[] = [
       {
         ...entry({
           lastError: { kind: "status-unavailable", at: NOW },
-          nextCheckAt: NOW + 5_000,
         }),
         snapshot: processing(),
       },
@@ -70,8 +69,8 @@ const ROWS: Row[] = [
     kind: "processing",
     title: "Processing",
     copy: [
-      "The service accepted this announcement and is publishing it. We'll keep checking automatically.",
-      "Couldn't refresh status. Showing the last known status — this doesn't mean publication failed. Retrying in 5s.",
+      "The service accepted this announcement and is publishing it. Use “Check status” to see if it has finished.",
+      "Couldn't refresh status. Showing the last known status — this doesn't mean publication failed. Use “Check status” to try again.",
     ],
     actions: ["Check status"],
   },
