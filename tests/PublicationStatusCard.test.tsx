@@ -39,8 +39,7 @@ function renderCard(op?: OperationEntry) {
 }
 
 /**
- * The card title. Not a live region: transitions are announced once, by the global
- * StatusLiveRegion, so the card adds no second announcement.
+ * The card title. Not a live region.
  */
 function expectTitle(card: HTMLElement, title: string) {
   expect(within(card).getByText(title, { selector: "p" })).toBeInTheDocument();

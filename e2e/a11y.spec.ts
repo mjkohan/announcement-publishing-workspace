@@ -35,7 +35,6 @@ for (const colorScheme of ["light", "dark"] as const) {
 
       await app.publish();
       await expect(app.cardTitle("Published")).toBeVisible();
-      await expect(page.getByRole("status")).toContainText("was published.");
       // Expand the attempt history so its rows are checked.
       await app.attempts(1).click();
 

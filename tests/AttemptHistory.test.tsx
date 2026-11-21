@@ -3,8 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { OperationEntry } from "../src/domain";
 import { entry, processing, rejected } from "../src/domain/testFactories";
-import { AttemptHistory, StatusLiveRegion } from "../src/features/announcements";
-import { App } from "../src/app";
+import { AttemptHistory } from "../src/features/announcements";
 import type { IAnnouncementService } from "../src/mocks";
 import { renderWithProviders } from "../src/test/renderWithProviders";
 
@@ -90,41 +89,5 @@ describe("AttemptHistory", () => {
     const rows = screen.getAllByRole("listitem", { hidden: true });
     expect(rows[0]).toHaveTextContent("Sending…");
     expect(rows[1]).toHaveTextContent("Rejected");
-  });
-});
-
-describe("StatusLiveRegion", () => {
-  it("is the app's only aria-live region, polite, and shows the latest message", () => {
-    const { store, container } = renderWithProviders(<App />, { service: silentService() });
-
-    const regions = container.querySelectorAll("[aria-live]");
-    expect(regions).toHaveLength(1);
-    const region = regions[0] as HTMLElement;
-    expect(region).toHaveAttribute("aria-live", "polite");
-    expect(region).toBeEmptyDOMElement();
-
-    act(() => {
-      store.setState({ liveAnnouncement: { id: 1, text: "New Feature Launch was published." } });
-    });
-    expect(region).toHaveTextContent("New Feature Launch was published.");
-
-    const node = region.firstElementChild;
-    act(() => {
-      store.setState({ liveAnnouncement: { id: 2, text: "New Feature Launch was published." } });
-    });
-    // Same text, new node: announced again.
-    expect(region.firstElementChild).not.toBe(node);
-  });
-
-  it("renders standalone", () => {
-    const { store, container } = renderWithProviders(<StatusLiveRegion />, {
-      service: silentService(),
-    });
-
-    act(() => {
-      store.setState({ liveAnnouncement: { id: 1, text: "Hello." } });
-    });
-
-    expect(container).toHaveTextContent("Hello.");
   });
 });

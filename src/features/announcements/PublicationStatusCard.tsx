@@ -139,7 +139,7 @@ export function PublicationStatusCard({ announcementId }: PublicationStatusCardP
         Publication status
       </h3>
 
-      {/* Not a live region: status changes are announced once by the global StatusLiveRegion. */}
+      {/* Not a live region: the badge and this card show status changes visually. */}
       <p className="text-lg font-semibold">{title}</p>
       <p className="text-sm break-words">{description}</p>
       {details}

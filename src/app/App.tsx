@@ -1,10 +1,5 @@
 import { SimulatorPanel } from "../dev";
-import {
-  AnnouncementDetail,
-  AnnouncementList,
-  RestoreBanner,
-  StatusLiveRegion,
-} from "../features/announcements";
+import { AnnouncementDetail, AnnouncementList, RestoreBanner } from "../features/announcements";
 
 export function App() {
   return (
@@ -33,8 +28,6 @@ export function App() {
       <footer className="border-t border-slate-200 px-4 py-4 md:px-6 dark:border-slate-800">
         <SimulatorPanel />
       </footer>
-
-      <StatusLiveRegion />
     </div>
   );
 }

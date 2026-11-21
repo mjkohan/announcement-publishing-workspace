@@ -1,6 +1,6 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { App } from "../src/app";
 import { createAnnouncementMock, type IAnnouncementService } from "../src/mocks";
 import { renderWithProviders } from "../src/test/renderWithProviders";
@@ -44,33 +44,6 @@ describe("switching announcements while one is submitting", () => {
     expect(
       within(nav()).getByRole("button", { name: /Service Maintenance Notice/ }),
     ).toHaveTextContent("Sending…");
-  });
-});
-
-describe("status announcements", () => {
-  it("after a publish resolves, the live region names the announcement", async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(<App />);
-
-    // Announcements (80 ms) and the restore list (100 ms).
-    await act(() => vi.advanceTimersByTimeAsync(200));
-    expect(screen.getByRole("status")).toBeEmptyDOMElement();
-
-    await user.click(within(actions()).getByRole("button", { name: "Publish" }));
-
-    // "success": the reply arrives after 120 ms with "processing".
-    await act(() => vi.advanceTimersByTimeAsync(200));
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Service Maintenance Notice is processing.",
-    );
-
-    // Publication completes after 2.5 s; polling reads the terminal snapshot.
-    await act(() => vi.advanceTimersByTimeAsync(15_000));
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Service Maintenance Notice was published.",
-    );
-    expect(within(main()).getByText("Published", { selector: "p" })).toBeInTheDocument();
   });
 });
 

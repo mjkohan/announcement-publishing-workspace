@@ -77,7 +77,7 @@ src/
   app/                    App shell, ServiceProvider (creates the store), hooks, ErrorBoundary
   domain/                 Pure types and logic: derive.ts (views), merge.ts (snapshots), operationId.ts, errors.ts
   persistence/journal.ts  Write-ahead journal in sessionStorage (own key)
-  store/                  publicationStore.ts, scheduler.ts, selectors.ts, statusAnnouncer.ts
+  store/                  publicationStore.ts, scheduler.ts, selectors.ts
   features/announcements/ List, detail, status card, actions, attempt history, restore banner
   ui/                     Shared presentational components (Button, Banner, ConfirmDialog, ...)
   dev/                    Simulation controls (scenario switcher, reset)

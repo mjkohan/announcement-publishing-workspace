@@ -14,7 +14,6 @@ import type {
   PublicationOperation,
 } from "../mocks";
 import type { Journal } from "../persistence/journal";
-import { watchStatusTransitions } from "./statusAnnouncer";
 import {
   browserTimers,
   createScheduler,
@@ -52,11 +51,6 @@ export interface PublicationState {
    * announcements load: the journal's choice if it is still listed, else the first one.
    */
   selectedId: string | undefined;
-  /**
-   * Latest status transition text for the global live region, set by `watchStatusTransitions`.
-   * `id` changes with every message, so the same text can be announced twice.
-   */
-  liveAnnouncement: { id: number; text: string } | null;
   /** Dev tool: the mock's scenario for new operations, as last read from the service. */
   scenario: AnnouncementScenario;
 }
@@ -521,7 +515,6 @@ export function createPublicationStore({
       selectedId: undefined,
       // A synchronous read of the service's own setting: no request, safe to run twice.
       scenario: service.getScenario(),
-      liveAnnouncement: null,
 
       async loadAnnouncements() {
         if (get().announcements.status === "loading") return;
@@ -647,7 +640,5 @@ export function createPublicationStore({
     };
   });
 
-  // Lives as long as the store: no unsubscribe needed.
-  watchStatusTransitions(store);
   return store;
 }
